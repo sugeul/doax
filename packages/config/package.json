@@ -1,0 +1,21 @@
+{
+    "name": "@doax/config",
+    "version": "0.1.0",
+    "description": "Configuration schema and loader shared by the doax server and the doax CLI.",
+    "license": "UNLICENSED",
+    "type": "module",
+    "exports": {
+        ".": {
+            "@doax/source": "./src/index.ts",
+            "types": "./dist/index.d.ts",
+            "default": "./dist/index.js"
+        }
+    },
+    "files": ["dist"],
+    "scripts": {
+        "build": "tsc -b"
+    },
+    "publishConfig": {
+        "access": "public"
+    }
+}

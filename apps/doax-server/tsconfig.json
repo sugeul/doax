@@ -1,0 +1,16 @@
+{
+    "extends": "../../tsconfig.base.json",
+    "compilerOptions": {
+        "rootDir": "src",
+        "outDir": "dist"
+    },
+    "include": ["src"],
+    "exclude": ["src/**/*.test.ts"],
+    "references": [
+        { "path": "../../packages/protocol" },
+        { "path": "../../packages/config" },
+        { "path": "../registry-server" },
+        { "path": "../code-repository" },
+        { "path": "../auth-server" }
+    ]
+}

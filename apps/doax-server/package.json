@@ -1,0 +1,38 @@
+{
+    "name": "doax-server",
+    "version": "0.1.0",
+    "description": "The doax registry as one process: Registry Server, Code Repository and Auth Server under a single hostname. Run it on-premise or evaluate it with npx.",
+    "license": "UNLICENSED",
+    "type": "module",
+    "bin": {
+        "doax-server": "./dist/main.js"
+    },
+    "exports": {
+        ".": {
+            "@doax/source": "./src/index.ts",
+            "types": "./dist/index.d.ts",
+            "default": "./dist/index.js"
+        }
+    },
+    "files": ["dist"],
+    "engines": {
+        "node": ">=24"
+    },
+    "scripts": {
+        "build": "tsc -b",
+        "dev": "node --conditions=@doax/source --watch src/main.ts",
+        "start": "node dist/main.js"
+    },
+    "dependencies": {
+        "@doax/auth-server": "workspace:*",
+        "@doax/code-repository": "workspace:*",
+        "@doax/config": "workspace:*",
+        "@doax/protocol": "workspace:*",
+        "@doax/registry-server": "workspace:*",
+        "@hono/node-server": "^2.0.0",
+        "hono": "^4.12.0"
+    },
+    "publishConfig": {
+        "access": "public"
+    }
+}

@@ -1,0 +1,25 @@
+{
+    "name": "doax-cli",
+    "version": "0.1.0",
+    "description": "doax Executor CLI: resolve, authenticate, run and audit registry resources from your device.",
+    "license": "UNLICENSED",
+    "type": "module",
+    "bin": {
+        "doax": "./dist/main.js"
+    },
+    "files": ["dist"],
+    "engines": {
+        "node": ">=24"
+    },
+    "scripts": {
+        "build": "tsc -b",
+        "dev": "node --conditions=@doax/source src/main.ts"
+    },
+    "dependencies": {
+        "@doax/config": "workspace:*",
+        "@doax/protocol": "workspace:*"
+    },
+    "publishConfig": {
+        "access": "public"
+    }
+}

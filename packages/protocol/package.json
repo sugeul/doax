@@ -1,0 +1,21 @@
+{
+    "name": "@doax/protocol",
+    "version": "0.1.0",
+    "description": "Shared contract of the doax registry: resource identity, tiers, manifests, audit events, tokens.",
+    "license": "UNLICENSED",
+    "type": "module",
+    "exports": {
+        ".": {
+            "@doax/source": "./src/index.ts",
+            "types": "./dist/index.d.ts",
+            "default": "./dist/index.js"
+        }
+    },
+    "files": ["dist"],
+    "scripts": {
+        "build": "tsc -b"
+    },
+    "publishConfig": {
+        "access": "public"
+    }
+}

@@ -1,0 +1,29 @@
+{
+    "name": "@doax/registry-server",
+    "version": "0.1.0",
+    "description": "doax Registry Server: manifest storage, search, resolution, namespace policy, audit ingest and query.",
+    "license": "UNLICENSED",
+    "type": "module",
+    "exports": {
+        ".": {
+            "@doax/source": "./src/index.ts",
+            "types": "./dist/index.d.ts",
+            "default": "./dist/index.js"
+        }
+    },
+    "files": ["dist"],
+    "scripts": {
+        "build": "tsc -b",
+        "dev": "node --conditions=@doax/source --watch src/main.ts",
+        "start": "node dist/main.js"
+    },
+    "dependencies": {
+        "@doax/config": "workspace:*",
+        "@doax/protocol": "workspace:*",
+        "@hono/node-server": "^2.0.0",
+        "hono": "^4.12.0"
+    },
+    "publishConfig": {
+        "access": "public"
+    }
+}

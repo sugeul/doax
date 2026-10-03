@@ -1,0 +1,17 @@
+{
+    "name": "@doax/executor-host",
+    "version": "0.1.0",
+    "private": true,
+    "type": "module",
+    "scripts": {
+        "build": "tsc -b",
+        "dev": "node --conditions=@doax/source --watch src/main.ts",
+        "start": "node dist/main.js"
+    },
+    "dependencies": {
+        "@doax/config": "workspace:*",
+        "@doax/protocol": "workspace:*",
+        "@hono/node-server": "^2.0.0",
+        "hono": "^4.12.0"
+    }
+}

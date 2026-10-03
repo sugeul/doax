@@ -1,0 +1,13 @@
+{
+    "files": [],
+    "references": [
+        { "path": "packages/protocol" },
+        { "path": "packages/config" },
+        { "path": "apps/registry-server" },
+        { "path": "apps/code-repository" },
+        { "path": "apps/auth-server" },
+        { "path": "apps/executor-host" },
+        { "path": "apps/doax-server" },
+        { "path": "apps/doax-cli" }
+    ]
+}
