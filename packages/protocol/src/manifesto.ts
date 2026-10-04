@@ -23,7 +23,7 @@ export const SYSTEM_DESCRIPTION =
     "doax is a registry of data and action resources that AI agents use on behalf of a human, " +
     "with every access audited and every resource declaring the authentication tier it demands.";
 
-export const SPECIFICATION_URL = "https://doax.ai/spec";
+export const SPECIFICATION_URL = "https://doax.io/spec";
 
 /** Builds a manifesto for one component. Shared so every component describes the system the same way. */
 export function buildManifesto(component: string, operator: string, extra: Record<string, unknown> = {}): Manifesto {
@@ -32,7 +32,7 @@ export function buildManifesto(component: string, operator: string, extra: Recor
         component,
         operator,
         specification: SPECIFICATION_URL,
-        gettingStarted: "https://doax.ai",
+        gettingStarted: "https://doax.io",
         ...extra,
     };
 }

@@ -8,9 +8,9 @@ An organization runs its own private registry from this codebase. These are the 
 |---|---|---|---|
 | 1 | Deployment unit | **One process, `doax-server`**, hosting Registry Server, Code Repository and Auth Server. The Executor host is a separate deployable. | Spec §3.1 allows one process or several. One is what an admin can actually install. The three components stay separate packages, so splitting later is a config change, not a rewrite. The Executor host runs on the batch machine, not the registry box (§6A). |
 | 2 | Storage | **Embedded SQLite (`node:sqlite`) and local filesystem by default.** Postgres and S3-compatible storage are declared config options, not yet implemented. | Zero external dependencies: `docker run` with a volume and it works. A first install that needs a database admin does not happen. |
-| 3 | Login | **Auth Server is generic OIDC; Google is the default issuer.** | Google Sign-In *is* OIDC, so the reference implementation the spec requires (§7.1) and "plug in your SSO" are the same code with a different issuer URL. The public doax.ai instance only enables Google, which keeps it within v1 scope. |
+| 3 | Login | **Auth Server is generic OIDC; Google is the default issuer.** | Google Sign-In *is* OIDC, so the reference implementation the spec requires (§7.1) and "plug in your SSO" are the same code with a different issuer URL. The public doax.io instance only enables Google, which keeps it within v1 scope. |
 | 4 | Addressing (spec §15.1) | **Path-based under one hostname:** `https://registry.corp.internal/@corp/orders`, packages at `/packages`, auth at `/auth`. | One hostname means one TLS certificate and no wildcard DNS. The `manifesto` field is just the configured domain. |
-| 5 | Upstream (spec §12.2) | **A config line, off by default.** `DOAX_UPSTREAM=https://doax.ai` enables the proxy with block/pin/require-verified policy. | An air-gapped install stays air-gapped unless someone decides otherwise. |
+| 5 | Upstream (spec §12.2) | **A config line, off by default.** `DOAX_UPSTREAM=https://doax.io` enables the proxy with block/pin/require-verified policy. | An air-gapped install stays air-gapped unless someone decides otherwise. |
 | 6 | Distribution | **Docker image first, `npx doax-server` second.** | Node 24 is already required, so npx works for evaluation; the image is what goes into a real environment. |
 
 The audit log is append-only at the database level: SQLite triggers refuse `UPDATE` and `DELETE` on `audit_events`, so no code path in the process can edit or remove an event (spec §8.1).
@@ -51,7 +51,7 @@ Then point every CLI at it:
 DOAX_REGISTRY=https://registry.corp.internal doax status
 ```
 
-Inside the organization's network, `doax.ai` may instead be resolved to the on-premises instance (spec §12.1) so that CLIs need no configuration.
+Inside the organization's network, `doax.io` may instead be resolved to the on-premises instance (spec §12.1) so that CLIs need no configuration.
 
 ## Endpoints today
 

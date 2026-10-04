@@ -101,7 +101,7 @@ So the surface carries the *control* half of doax's value. Underneath is governe
 
 ## 6. Multi-tenant SaaS: public catalog plus `@org`
 
-The hosted instance ([doax.ai](https://doax.ai)) is **multi-tenant from day one** — the npm model. We hold `@doax`; every org gets its `@org` scope with private, auth-gated resources, using the spec's existing machinery: visibility axes (§4.5), tokens carrying namespace membership (§7.2), namespace management (§10).
+The hosted instance ([doax.io](https://doax.io)) is **multi-tenant from day one** — the npm model. We hold `@doax`; every org gets its `@org` scope with private, auth-gated resources, using the spec's existing machinery: visibility axes (§4.5), tokens carrying namespace membership (§7.2), namespace management (§10).
 
 This matters because a business can feel value on **their own** private resources on SaaS, not only on public ones — which partly closes the gap between a trial and the on-prem payoff.
 
@@ -175,7 +175,7 @@ registry core  (resolve · search · publish — WITH auth · namespaces · visi
    → executor-core  (shared library, §2)
       → surfaces  (CLI, thin MCP, chat §5)
          → seed real public resources  (the SaaS experience, §8)
-            → ship as SaaS (doax.ai)
+            → ship as SaaS (doax.io)
                → [later] appliance packaging for on-prem (§8.1)
 ```
 

@@ -13,7 +13,7 @@ Usage:
     doax --help
 
 Environment:
-    DOAX_REGISTRY   Registry origin (default: https://doax.ai). Point it at a private install.
+    DOAX_REGISTRY   Registry origin (default: https://doax.io). Point it at a private install.
 `;
 
 export interface CliResult {

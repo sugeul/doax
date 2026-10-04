@@ -1,6 +1,6 @@
 # doax
 
-**doax** (Day One AX, where AX is the AI transition) is a registry of data and action resources that AI agents use on behalf of a human. [doax.ai](https://doax.ai) runs the public registry. A company can also install and run its own private registry from this codebase; see [docs/deployment.md](docs/deployment.md).
+**doax** (Day One AX, where AX is the AI transition) is a registry of data and action resources that AI agents use on behalf of a human. [doax.io](https://doax.io) runs the public registry. A company can also install and run its own private registry from this codebase; see [docs/deployment.md](docs/deployment.md).
 
 The specification is in [docs/spec/registry-v0.1.md](docs/spec/registry-v0.1.md).
 
@@ -28,7 +28,7 @@ pnpm install
 pnpm test        # vitest, runs against TypeScript sources
 pnpm build       # tsc -b, emits dist/ per package
 pnpm --filter doax-server dev                    # whole server on :8080
-pnpm --filter doax-cli dev -- status             # CLI against DOAX_REGISTRY (default https://doax.ai)
+pnpm --filter doax-cli dev -- status             # CLI against DOAX_REGISTRY (default https://doax.io)
 ```
 
 During development, packages resolve each other's `src/*.ts` through the `@doax/source` export condition and Node's built-in type stripping, so no build step is needed. Production runs `dist/`.

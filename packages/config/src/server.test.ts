@@ -12,12 +12,12 @@ describe("loadServerConfig", () => {
 
     it("lets environment override the file, and the file override defaults", () => {
         const config = loadServerConfig(
-            { DOAX_DOMAIN: "https://registry.corp.internal", DOAX_UPSTREAM: "https://doax.ai" },
+            { DOAX_DOMAIN: "https://registry.corp.internal", DOAX_UPSTREAM: "https://doax.io" },
             { domain: "https://ignored.example", operator: "Corp IT", auth: { oidcIssuer: "https://sso.corp.internal" } },
         );
         expect(config.domain).toBe("https://registry.corp.internal");
         expect(config.operator).toBe("Corp IT");
-        expect(config.upstream).toBe("https://doax.ai");
+        expect(config.upstream).toBe("https://doax.io");
         expect(config.auth).toEqual({ oidcIssuer: "https://sso.corp.internal", clientId: null });
     });
 

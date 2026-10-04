@@ -3,7 +3,7 @@ export interface CliConfig {
     registry: string;
 }
 
-export const PUBLIC_REGISTRY = "https://doax.ai";
+export const PUBLIC_REGISTRY = "https://doax.io";
 
 export function loadCliConfig(env: Record<string, string | undefined> = {}): CliConfig {
     return { registry: (env.DOAX_REGISTRY ?? PUBLIC_REGISTRY).replace(/\/+$/, "") };
