@@ -119,8 +119,12 @@
     </table>
 
     <h2>Private registries</h2>
-    <pre><span class="p">$</span> DOAX_REGISTRY=https://registry.corp.internal doax status</pre>
-    <p>The same CLI speaks to any doax registry — public or your company's own closed install.</p>
+    <p>The CLI holds a <em>list</em> of registries and resolves each resource from the one that owns its namespace — the npm scoped-registry model:</p>
+    <pre><span class="p">$</span> doax registry add @mate https://kachit.ai/registry
+<span class="p">$</span> doax read @mate/orders --param since=2026-01-01
+<span class="c"># @mate/* resolves at kachit.ai; everything else at registry.doax.io</span>
+<span class="p">$</span> doax registry list</pre>
+    <p>Unrouted namespaces use the default registry (<code>doax registry add default &lt;url&gt;</code>, or <code>DOAX_REGISTRY</code>). Audit events for a resource are delivered to the registry it came from, so a company's own usage lands in its own audit log.</p>
 
     <h2>Uninstall</h2>
     <pre><span class="p">$</span> rm -rf ~/.doax ~/.local/bin/doax</pre>

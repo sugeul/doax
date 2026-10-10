@@ -36,6 +36,53 @@ export interface ResolvedResource {
     lifecycle: string;
     package: string;
     warning?: string;
+    /** Registry origin that resolved this resource; packages and audit go back to it. */
+    origin: string;
+}
+
+/* ---------- the client's registry list: namespaces route to registries (npm-scope style) ---------- */
+
+export interface RegistryMap {
+    default: string;
+    /** `@namespace` -> registry origin */
+    scopes: Record<string, string>;
+}
+
+const configPath = (deps: ExecutorDeps) => join(deps.home, "config.json");
+
+export function readRegistryMap(deps: ExecutorDeps): RegistryMap {
+    let registries: Record<string, string> = {};
+    try {
+        const file = JSON.parse(readFileSync(configPath(deps), "utf8")) as { registries?: Record<string, string> };
+        registries = file.registries ?? {};
+    } catch {
+        /* no config yet */
+    }
+    const scopes: Record<string, string> = {};
+    for (const [key, url] of Object.entries(registries)) {
+        if (key.startsWith("@")) scopes[key] = url.replace(/\/+$/, "");
+    }
+    return { default: (registries.default ?? deps.config.registry).replace(/\/+$/, ""), scopes };
+}
+
+export function writeRegistryEntry(deps: ExecutorDeps, key: string, url: string | null): void {
+    let file: { registries?: Record<string, string> } = {};
+    try {
+        file = JSON.parse(readFileSync(configPath(deps), "utf8")) as typeof file;
+    } catch {
+        /* new config */
+    }
+    file.registries ??= {};
+    if (url) file.registries[key] = url.replace(/\/+$/, "");
+    else delete file.registries[key];
+    mkdirSync(deps.home, { recursive: true });
+    writeFileSync(configPath(deps), JSON.stringify(file, null, 2));
+}
+
+/** The registry that owns a namespace: its scoped entry, else the default. */
+export function registryFor(deps: ExecutorDeps, namespace: string): string {
+    const map = readRegistryMap(deps);
+    return map.scopes[`@${namespace}`] ?? map.default;
 }
 
 export interface ExecutorDeps {
@@ -62,11 +109,13 @@ export class ExecutorError extends Error {
 const fault = (err: unknown): string => (err as { faultClass?: string })?.faultClass ?? "undeclared";
 
 export async function resolveResource(deps: ExecutorDeps, ref: string): Promise<ResolvedResource> {
-    const canonical = formatResourceRef(parseResourceRef(ref));
-    const res = await deps.fetch(`${deps.config.registry}/${canonical}`);
+    const parsed = parseResourceRef(ref);
+    const canonical = formatResourceRef(parsed);
+    const origin = registryFor(deps, parsed.namespace);
+    const res = await deps.fetch(`${origin}/${canonical}`);
     const body = (await res.json()) as ResolvedResource & { error?: string };
-    if (!res.ok) throw new ExecutorError(`resolve ${canonical}: ${body.error ?? res.status}`, "resolve-failed");
-    return body;
+    if (!res.ok) throw new ExecutorError(`resolve ${canonical} at ${origin}: ${body.error ?? res.status}`, "resolve-failed");
+    return { ...body, origin };
 }
 
 /** Fetch the package, refuse on digest mismatch (§9.2), cache by digest, return the module. */
@@ -74,7 +123,7 @@ export async function loadPackage(deps: ExecutorDeps, resolved: ResolvedResource
     const cacheDir = join(deps.home, "cache");
     const cached = join(cacheDir, `${resolved.digest.replace(/[^a-z0-9-]/gi, "_")}.mjs`);
     if (!existsSync(cached)) {
-        const res = await deps.fetch(`${deps.config.registry}${resolved.package}`);
+        const res = await deps.fetch(`${resolved.origin}${resolved.package}`);
         if (!res.ok) throw new ExecutorError(`fetch ${resolved.package}: HTTP ${res.status}`, "fetch-failed");
         const content = Buffer.from(await res.arrayBuffer());
         const digest = `sha256-${createHash("sha256").update(content).digest("hex")}`;
@@ -83,9 +132,11 @@ export async function loadPackage(deps: ExecutorDeps, resolved: ResolvedResource
         }
         mkdirSync(cacheDir, { recursive: true });
         writeFileSync(cached, content);
-        await audit(deps, [
-            baseEvent(deps, "fetch", resolved.identity, { tier: 4, strengthenedBy: [] }, { status: "success", reasonCode: "ok" }),
-        ]);
+        await audit(
+            deps,
+            [baseEvent(deps, "fetch", resolved.identity, { tier: 4, strengthenedBy: [] }, { status: "success", reasonCode: "ok" })],
+            resolved.origin,
+        );
     }
     return (await import(pathToFileURL(cached).href)) as Record<string, unknown>;
 }
@@ -192,7 +243,8 @@ export function baseEvent(
     };
 }
 
-export async function audit(deps: ExecutorDeps, events: AuditEvent[]): Promise<void> {
+export async function audit(deps: ExecutorDeps, events: AuditEvent[], origin?: string): Promise<void> {
+    const destination = origin ?? readRegistryMap(deps).default;
     const pending: AuditEvent[] = [];
     try {
         const buffered = readFileSync(bufferPath(deps), "utf8")
@@ -205,7 +257,7 @@ export async function audit(deps: ExecutorDeps, events: AuditEvent[]): Promise<v
     }
     pending.push(...events);
     try {
-        const res = await deps.fetch(`${deps.config.registry}/audit`, {
+        const res = await deps.fetch(`${destination}/audit`, {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify({ events: pending }),

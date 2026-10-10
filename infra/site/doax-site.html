@@ -139,12 +139,12 @@
   }
   .cmd .p { color: var(--accent); user-select: none; }
   .cmd code { color: var(--ink); white-space: nowrap; }
-  .cmd .copy {
+  .cmd .copybtn {
     margin-left: auto; font: inherit; font-size: 12px; color: var(--muted); background: var(--surface-2);
     border: 1px solid var(--line); border-radius: 8px; padding: 6px 12px; cursor: pointer; flex: none;
   }
-  .cmd .copy:hover { color: var(--ink); border-color: var(--accent); }
-  .cmd .copy.done { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); }
+  .cmd .copybtn:hover { color: var(--ink); border-color: var(--accent); }
+  .cmd .copybtn.done { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); }
   .quickstart { margin-top: 18px; display: grid; gap: 8px; max-width: 860px; }
   .qs {
     display: flex; align-items: baseline; gap: 12px; font-family: var(--mono); font-size: 13.5px;
@@ -289,7 +289,7 @@
       <div class="cmd" id="installCmd">
         <span class="p">$</span>
         <code>curl -fsSL https://doax.io/install.sh | bash</code>
-        <button class="copy" id="copyInstall" aria-label="Copy install command">copy</button>
+        <button class="copybtn" id="copyInstall" aria-label="Copy install command">copy</button>
       </div>
       <div class="quickstart">
         <div class="qs"><span class="p">$</span><code>doax search slack</code><span class="qc">find something to use</span></div>

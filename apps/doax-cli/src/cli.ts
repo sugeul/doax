@@ -18,9 +18,11 @@ import {
     loadPackage,
     purgeCredentials,
     readCredentials,
+    readRegistryMap,
     type ResolvedResource,
     resolveResource,
     writeCredential,
+    writeRegistryEntry,
 } from "./executor.ts";
 
 export const VERSION = "0.2.0";
@@ -29,6 +31,9 @@ const USAGE = `doax ${VERSION} — Executor CLI for the doax registry
 
 Usage:
     doax status                               Show the registry this CLI talks to and whether it answers
+    doax registry add <@ns|default> <url>     Route a namespace to a registry (npm-scope style)
+    doax registry list                        Show the registry list and routing
+    doax registry remove <@ns|default>        Remove a routing entry
     doax search <query> [--kind <kind>]       Search resources visible to you
     doax resolve <@ns/name[@version]>         Resolve a resource and print its manifest
     doax ref <@ns/name[@version]>             Parse and print a resource reference
@@ -48,8 +53,12 @@ Every command runs non-interactively for agent callers:
     --secret        Supply the authenticator secret inline when nothing is cached
     --yes           Grant tier-2 per-call authorization without a prompt
 
+Registries: the CLI holds a list of registries and resolves each entity from the one that owns
+its namespace (doax registry add @corp https://registry.corp.internal). Unrouted namespaces use
+the default registry. Audit for a resource is delivered to the registry it came from.
+
 Environment:
-    DOAX_REGISTRY   Registry origin (default: https://registry.doax.io). Point it at a private install.
+    DOAX_REGISTRY   Default registry origin (default: https://registry.doax.io).
     DOAX_NO_INPUT   Set to 1 to force non-interactive mode.
 `;
 
@@ -123,6 +132,8 @@ export async function run(argv: string[], deps: CliDeps = defaultDeps()): Promis
                 return ref(rest[0]);
             case "status":
                 return await status(deps);
+            case "registry":
+                return registryCmd(deps, rest, json);
             case "search":
                 return await search(deps, rest.join(" "), values.kind as string | undefined, json);
             case "resolve":
@@ -157,21 +168,53 @@ function ref(input: string | undefined): CliResult {
     }
 }
 
-async function status({ config, fetch }: CliDeps): Promise<CliResult> {
+async function status(deps: CliDeps): Promise<CliResult> {
+    const map = readRegistryMap(executorDeps(deps));
     try {
-        const res = await fetch(`${config.registry}/`);
+        const res = await deps.fetch(`${map.default}/`);
         const body = (await res.json()) as Record<string, unknown>;
         return {
             exitCode: res.ok ? 0 : 1,
-            stdout: JSON.stringify({ registry: config.registry, reachable: res.ok, ...body }, null, 2),
+            stdout: JSON.stringify({ registry: map.default, scopes: map.scopes, reachable: res.ok, ...body }, null, 2),
         };
     } catch (err) {
-        return { exitCode: 1, stderr: `doax status: ${config.registry} is unreachable (${(err as Error).message})` };
+        return { exitCode: 1, stderr: `doax status: ${map.default} is unreachable (${(err as Error).message})` };
     }
 }
 
+const REGISTRY_KEY = /^(default|@[a-z0-9][a-z0-9._-]*)$/;
+
+/** The client's registry list (architecture: multiple registries, entities looked up by namespace). */
+function registryCmd(deps: CliDeps, rest: string[], json: boolean): CliResult {
+    const [sub, key, url] = rest;
+    const xdeps = executorDeps(deps);
+
+    if (!sub || sub === "list") {
+        const map = readRegistryMap(xdeps);
+        if (json) return { exitCode: 0, stdout: JSON.stringify({ ok: true, default: map.default, scopes: map.scopes }) };
+        const lines = [`default -> ${map.default}`, ...Object.entries(map.scopes).map(([ns, origin]) => `${ns} -> ${origin}`)];
+        return { exitCode: 0, stdout: lines.join("\n") };
+    }
+
+    if (sub === "add") {
+        if (!key || !url) return { exitCode: 2, stderr: "doax registry add: expected <@ns|default> <url>" };
+        if (!REGISTRY_KEY.test(key)) return { exitCode: 2, stderr: `doax registry add: key must be @namespace or "default", got "${key}"` };
+        if (!/^https?:\/\//.test(url)) return { exitCode: 2, stderr: `doax registry add: url must be http(s), got "${url}"` };
+        writeRegistryEntry(xdeps, key, url);
+        return { exitCode: 0, stdout: json ? JSON.stringify({ ok: true, added: { [key]: url.replace(/\/+$/, "") } }) : `${key} -> ${url.replace(/\/+$/, "")}` };
+    }
+
+    if (sub === "remove") {
+        if (!key || !REGISTRY_KEY.test(key)) return { exitCode: 2, stderr: "doax registry remove: expected <@ns|default>" };
+        writeRegistryEntry(xdeps, key, null);
+        return { exitCode: 0, stdout: json ? JSON.stringify({ ok: true, removed: key }) : `removed ${key}` };
+    }
+
+    return { exitCode: 2, stderr: "doax registry: expected `add <@ns|default> <url>`, `list`, or `remove <@ns|default>`" };
+}
+
 async function search(deps: CliDeps, query: string, kind: string | undefined, json: boolean): Promise<CliResult> {
-    const url = new URL(`${deps.config.registry}/search`);
+    const url = new URL(`${readRegistryMap(executorDeps(deps)).default}/search`);
     url.searchParams.set("q", query);
     if (kind) url.searchParams.set("kind", kind);
     const res = await deps.fetch(url);
@@ -252,12 +295,12 @@ async function acquireCredential(deps: ExecutorDeps, authResolved: ResolvedResou
         writeCredential(deps, credentialKey(authResolved.identity), entry);
         await audit(deps, [
             baseEvent(deps, "auth", authResolved.identity, effective, { status: "success", reasonCode: "ok" }, { authenticator: authResolved.identity }),
-        ]);
+        ], authResolved.origin);
         return entry;
     } catch (err) {
         await audit(deps, [
             baseEvent(deps, "auth", authResolved.identity, effective, { status: "failure", reasonCode: fault(err) }, { authenticator: authResolved.identity }),
-        ]);
+        ], authResolved.origin);
         throw err;
     }
 }
@@ -366,12 +409,12 @@ async function readCmd(deps: CliDeps, refInput: string | undefined, values: Reco
         const freshness = (result.freshness ?? (result.metadata as { lastRefreshed?: string } | undefined)?.lastRefreshed) as string | undefined;
         await audit(xdeps, [
             baseEvent(xdeps, eventClass, resolved.identity, effective, { status: "success", reasonCode: "ok" }, { authenticator, sourceFreshness: freshness }),
-        ]);
+        ], resolved.origin);
         return { exitCode: 0, stdout: JSON.stringify(result, null, 2) };
     } catch (err) {
         await audit(xdeps, [
             baseEvent(xdeps, eventClass, resolved.identity, effective, { status: "failure", reasonCode: fault(err) }, { authenticator }),
-        ]);
+        ], resolved.origin);
         throw err;
     }
 }
@@ -396,14 +439,14 @@ async function executeCmd(deps: CliDeps, refInput: string | undefined, values: R
                     authenticator,
                     dryRun: { mode: dryRunMode as "predictive" | "native", estimated: dryRunMode === "predictive" },
                 }),
-            ]);
+            ], resolved.origin);
             if (json) return { exitCode: 0, stdout: JSON.stringify({ ok: true, estimated: dryRunMode === "predictive", mode: dryRunMode, result }) };
             const label = dryRunMode === "predictive" ? "ESTIMATED (predictive dry-run; not guaranteed by the target)" : "native dry-run";
             return { exitCode: 0, stdout: `${label}\n${JSON.stringify(result, null, 2)}` };
         } catch (err) {
             await audit(xdeps, [
                 baseEvent(xdeps, "dry-run", resolved.identity, effective, { status: "failure", reasonCode: fault(err) }, { authenticator }),
-            ]);
+            ], resolved.origin);
             throw err;
         }
     }
@@ -417,12 +460,12 @@ async function executeCmd(deps: CliDeps, refInput: string | undefined, values: R
         const result = await invokeOperation(module, resolved, "execute", input, { credential, idempotencyKey });
         await audit(xdeps, [
             baseEvent(xdeps, "execute", resolved.identity, effective, { status: "success", reasonCode: "ok" }, { authenticator, idempotencyKey }),
-        ]);
+        ], resolved.origin);
         return { exitCode: 0, stdout: JSON.stringify(result, null, 2) };
     } catch (err) {
         await audit(xdeps, [
             baseEvent(xdeps, "execute", resolved.identity, effective, { status: "failure", reasonCode: fault(err) }, { authenticator, idempotencyKey }),
-        ]);
+        ], resolved.origin);
         throw err;
     }
 }
