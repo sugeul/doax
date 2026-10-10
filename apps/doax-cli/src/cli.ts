@@ -190,18 +190,55 @@ function paramsToInput(params: unknown): Record<string, unknown> {
     return input;
 }
 
-/** Resolve the resource's Authenticator, its cached credential, and the effective tier (§9.1 steps 4-5). */
+/** Run the Authenticator's flow (§4.7): collect the secret, authenticate, cache, audit. */
+async function acquireCredential(deps: ExecutorDeps, authResolved: ResolvedResource, secret: string) {
+    const module = await loadPackage(deps, authResolved);
+    const effective = effectiveTierFor(authResolved, null);
+    try {
+        const outcome = (await invokeOperation(module, authResolved, "authenticate", { mode: "initial", secret }, {})) as {
+            credential: Record<string, unknown>;
+            principal?: Record<string, unknown>;
+        };
+        const entry = {
+            authenticator: authResolved.identity,
+            credential: outcome.credential,
+            principal: outcome.principal,
+            storedAt: new Date().toISOString(),
+        };
+        writeCredential(deps, credentialKey(authResolved.identity), entry);
+        await audit(deps, [
+            baseEvent(deps, "auth", authResolved.identity, effective, { status: "success", reasonCode: "ok" }, { authenticator: authResolved.identity }),
+        ]);
+        return entry;
+    } catch (err) {
+        await audit(deps, [
+            baseEvent(deps, "auth", authResolved.identity, effective, { status: "failure", reasonCode: fault(err) }, { authenticator: authResolved.identity }),
+        ]);
+        throw err;
+    }
+}
+
+/**
+  * Resolve the resource's Authenticator, its cached credential, and the effective tier
+  * (§9.1 steps 4-5). No pre-auth is required: when nothing is cached and the session is
+  * interactive, the auth flow runs inline, in context, and the operation continues.
+  */
 async function credentialFor(deps: ExecutorDeps, resolved: ResolvedResource) {
     const authRef = resolved.manifest.authenticator;
     if (!authRef || authRef === "none") return { credential: null, authenticator: "none" as const, effective: effectiveTierFor(resolved, null) };
     const authResolved = await resolveResource(deps, String(authRef));
     const effective = effectiveTierFor(resolved, (authResolved.manifest.requiredTier as Tier | undefined) ?? null);
-    const entry = readCredentials(deps)[credentialKey(String(authRef))];
+    let entry = readCredentials(deps)[credentialKey(String(authRef))];
     if (!entry) {
-        throw new ExecutorError(
-            `no cached credential for ${authRef}; run: doax auth set ${String(authRef)}`,
-            "credential-missing",
-        );
+        if (!deps.prompt) {
+            throw new ExecutorError(
+                `no cached credential for ${authRef}; run interactively, or: doax auth set ${String(authRef)} --secret ...`,
+                "credential-missing",
+            );
+        }
+        const secret = (await deps.prompt(`${resolved.identity} needs ${authRef}\nsecret for ${authResolved.identity} (input is echoed): `)).trim();
+        if (!secret) throw new ExecutorError("no secret entered", "credential-missing");
+        entry = await acquireCredential(deps, authResolved, secret);
     }
     return { credential: entry.credential, authenticator: String(authRef), effective };
 }
@@ -242,29 +279,8 @@ async function authCmd(deps: CliDeps, rest: string[], values: Record<string, unk
     if (!secret && xdeps.prompt) secret = (await xdeps.prompt(`secret for ${resolved.identity} (input is echoed): `)).trim();
     if (!secret) return { exitCode: 2, stderr: "doax auth set: provide --secret (or run interactively)" };
 
-    const module = await loadPackage(xdeps, resolved);
-    const effective = effectiveTierFor(resolved, null);
-    try {
-        const outcome = (await invokeOperation(module, resolved, "authenticate", { mode: "initial", secret }, {})) as {
-            credential: Record<string, unknown>;
-            principal?: Record<string, unknown>;
-        };
-        writeCredential(xdeps, credentialKey(resolved.identity), {
-            authenticator: resolved.identity,
-            credential: outcome.credential,
-            principal: outcome.principal,
-            storedAt: new Date().toISOString(),
-        });
-        await audit(xdeps, [
-            baseEvent(xdeps, "auth", resolved.identity, effective, { status: "success", reasonCode: "ok" }, { authenticator: resolved.identity }),
-        ]);
-        return { exitCode: 0, stdout: `authenticated via ${resolved.identity}\nprincipal: ${JSON.stringify(outcome.principal ?? {})}` };
-    } catch (err) {
-        await audit(xdeps, [
-            baseEvent(xdeps, "auth", resolved.identity, effective, { status: "failure", reasonCode: fault(err) }, { authenticator: resolved.identity }),
-        ]);
-        throw err;
-    }
+    const entry = await acquireCredential(xdeps, resolved, secret);
+    return { exitCode: 0, stdout: `authenticated via ${resolved.identity}\nprincipal: ${JSON.stringify(entry.principal ?? {})}` };
 }
 
 async function readCmd(deps: CliDeps, refInput: string | undefined, values: Record<string, unknown>): Promise<CliResult> {
