@@ -74,6 +74,7 @@ resource "aws_lambda_function" "registry" {
       DOAX_DB_NAME         = aws_rds_cluster.main.database_name
       DOAX_DB_USER         = aws_rds_cluster.main.master_username
       DOAX_DB_PASSWORD     = random_password.db.result
+      DOAX_ADMIN_TOKEN     = random_password.admin_token.result
     }
   }
 
@@ -82,3 +83,15 @@ resource "aws_lambda_function" "registry" {
 
 # Routed via API Gateway HTTP API (see apigw.tf); the Function URL path was retired after
 # its auth layer rejected provably-correct public and OAC-signed invokes on this account.
+
+# Gates publish until the Auth Server issues §7.2 tokens. Read with:
+#   terraform output -raw admin_token
+resource "random_password" "admin_token" {
+  length  = 40
+  special = false
+}
+
+output "admin_token" {
+  value     = random_password.admin_token.result
+  sensitive = true
+}
