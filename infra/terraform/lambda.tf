@@ -75,6 +75,7 @@ resource "aws_lambda_function" "registry" {
       DOAX_DB_USER         = aws_rds_cluster.main.master_username
       DOAX_DB_PASSWORD     = random_password.db.result
       DOAX_ADMIN_TOKEN     = random_password.admin_token.result
+      DOAX_AUDIT_LOG_GROUP = aws_cloudwatch_log_group.audit.name
     }
   }
 

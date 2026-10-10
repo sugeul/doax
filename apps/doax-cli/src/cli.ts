@@ -45,6 +45,8 @@ Usage:
                                               Read a data-source (or its metadata)
     doax execute <@ns/name[@version]> [--param k=v ...] [--dry-run] [--yes] [--secret <value>]
                                               Dry-run or execute an action
+    doax audit [--class <c>] [--actor <a>] [--resource <@ns/name>] [--since <iso>] [--limit <n>]
+                                              Query the audit log (operator: DOAX_ADMIN_TOKEN)
     doax --version | --help
 
 Every command runs non-interactively for agent callers:
@@ -114,6 +116,12 @@ export async function run(argv: string[], deps: CliDeps = defaultDeps()): Promis
             all: { type: "boolean" },
             json: { type: "boolean" },
             "no-input": { type: "boolean" },
+            class: { type: "string" },
+            actor: { type: "string" },
+            resource: { type: "string" },
+            since: { type: "string" },
+            until: { type: "string" },
+            limit: { type: "string" },
         },
         allowPositionals: true,
         strict: false,
@@ -144,6 +152,8 @@ export async function run(argv: string[], deps: CliDeps = defaultDeps()): Promis
                 return await readCmd(deps, rest[0], values);
             case "execute":
                 return await executeCmd(deps, rest[0], values, json);
+            case "audit":
+                return await auditCmd(deps, values, json);
             default:
                 return { exitCode: 2, stderr: `doax: unknown command "${command}"\n` + USAGE };
         }
@@ -181,6 +191,29 @@ async function status(deps: CliDeps): Promise<CliResult> {
     } catch (err) {
         return { exitCode: 1, stderr: `doax status: ${map.default} is unreachable (${(err as Error).message})` };
     }
+}
+
+/** Audit query (spec §8.5). Operator-gated until permission control lands. */
+async function auditCmd(deps: CliDeps, values: Record<string, unknown>, json: boolean): Promise<CliResult> {
+    const base = readRegistryMap(executorDeps(deps)).default;
+    const token = process.env.DOAX_ADMIN_TOKEN;
+    if (!token) return { exitCode: 2, stderr: "doax audit: set DOAX_ADMIN_TOKEN (operator-only until permission control lands)" };
+    const url = new URL(`${base}/audit`);
+    for (const key of ["class", "actor", "resource", "since", "until", "limit"] as const) {
+        if (typeof values[key] === "string" && values[key]) url.searchParams.set(key, values[key] as string);
+    }
+    const res = await deps.fetch(url, { headers: { "x-doax-admin-token": token } });
+    const body = (await res.json()) as { events?: Record<string, unknown>[]; count?: number; error?: string };
+    if (!res.ok || !body.events) {
+        return { exitCode: 1, stderr: json ? JSON.stringify({ ok: false, error: body.error ?? res.status }) : `doax audit: ${body.error ?? res.status}` };
+    }
+    if (json) return { exitCode: 0, stdout: JSON.stringify({ ok: true, count: body.count, events: body.events }) };
+    if (body.events.length === 0) return { exitCode: 0, stdout: "no audit events match" };
+    const lines = body.events.map((e) => {
+        const outcome = (e.outcome as { status?: string; reasonCode?: string }) ?? {};
+        return `${e.timestamp}  ${String(e.class).padEnd(13)} ${String(e.actor).padEnd(24)} ${e.resource}  ${outcome.status ?? ""}${outcome.reasonCode && outcome.reasonCode !== "ok" ? ` [${outcome.reasonCode}]` : ""}`;
+    });
+    return { exitCode: 0, stdout: lines.join("\n") };
 }
 
 const REGISTRY_KEY = /^(default|@[a-z0-9][a-z0-9._-]*)$/;

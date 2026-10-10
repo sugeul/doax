@@ -2,6 +2,12 @@ import { createHash, randomUUID } from "node:crypto";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { handle } from "hono/aws-lambda";
+import {
+    CloudWatchLogsClient,
+    CreateLogStreamCommand,
+    FilterLogEventsCommand,
+    PutLogEventsCommand,
+} from "@aws-sdk/client-cloudwatch-logs";
 import { HeadBucketCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import pg from "pg";
 import { MOUNTS } from "@doax/config";
@@ -21,8 +27,10 @@ const DOMAIN = process.env.DOAX_DOMAIN ?? "https://registry.doax.io";
 const OPERATOR = process.env.DOAX_OPERATOR ?? "unconfigured";
 const PACKAGES_BUCKET = process.env.DOAX_PACKAGES_BUCKET ?? "";
 const ADMIN_TOKEN = process.env.DOAX_ADMIN_TOKEN ?? "";
+const AUDIT_LOG_GROUP = process.env.DOAX_AUDIT_LOG_GROUP ?? "";
 
 const s3 = new S3Client({});
+const cw = new CloudWatchLogsClient({});
 const db = process.env.DOAX_DB_HOST
     ? new pg.Pool({
           host: process.env.DOAX_DB_HOST,
@@ -38,7 +46,6 @@ const db = process.env.DOAX_DB_HOST
 
 let schemaReady: Promise<void> | null = null;
 
-/** Audit append-only at the database level (spec §8.1), matching the SQLite storage's triggers. */
 function ensureSchema(): Promise<void> {
     if (!db) return Promise.reject(new Error("database not configured"));
     schemaReady ??= (async () => {
@@ -56,43 +63,58 @@ function ensureSchema(): Promise<void> {
                 published_at TIMESTAMPTZ NOT NULL DEFAULT now(),
                 PRIMARY KEY (namespace, name, version)
             );
-            CREATE TABLE IF NOT EXISTS audit_events (
-                event_id  TEXT PRIMARY KEY,
-                timestamp TIMESTAMPTZ NOT NULL,
-                class     TEXT NOT NULL,
-                actor     TEXT NOT NULL,
-                resource  TEXT NOT NULL,
-                body      JSONB NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS audit_events_by_time ON audit_events (timestamp);
-            CREATE INDEX IF NOT EXISTS audit_events_by_resource ON audit_events (resource, timestamp);
-            CREATE OR REPLACE FUNCTION audit_events_append_only() RETURNS trigger AS
-                $$ BEGIN RAISE EXCEPTION 'audit events are append-only'; END $$ LANGUAGE plpgsql;
-            DROP TRIGGER IF EXISTS audit_append_only ON audit_events;
-            CREATE TRIGGER audit_append_only
-                BEFORE UPDATE OR DELETE ON audit_events
-                FOR EACH ROW EXECUTE FUNCTION audit_events_append_only();
         `);
     })();
     return schemaReady;
 }
 
-async function appendAudit(event: {
+/*
+ * Audit store: CloudWatch Logs (append-only by construction — log events cannot be edited or
+ * deleted individually; retention is set to "never expire" in Terraform). One stream per UTC
+ * day. Redelivered events may duplicate at ingest; the query side dedupes by eventId.
+ */
+type AuditInput = {
     eventId?: string;
     timestamp?: string;
     class: string;
     actor: string;
     resource: string;
     [extra: string]: unknown;
-}): Promise<string> {
-    const eventId = typeof event.eventId === "string" && event.eventId ? event.eventId : randomUUID();
-    const timestamp = typeof event.timestamp === "string" && event.timestamp ? event.timestamp : new Date().toISOString();
-    await db!.query(
-        `INSERT INTO audit_events (event_id, timestamp, class, actor, resource, body)
-         VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (event_id) DO NOTHING`,
-        [eventId, timestamp, event.class, event.actor, event.resource, JSON.stringify(event)],
+};
+
+const auditStreams = new Set<string>();
+
+async function ensureAuditStream(stream: string): Promise<void> {
+    if (auditStreams.has(stream)) return;
+    try {
+        await cw.send(new CreateLogStreamCommand({ logGroupName: AUDIT_LOG_GROUP, logStreamName: stream }));
+    } catch (error) {
+        if ((error as { name?: string }).name !== "ResourceAlreadyExistsException") throw error;
+    }
+    auditStreams.add(stream);
+}
+
+async function appendAudit(events: AuditInput[]): Promise<string[]> {
+    if (!AUDIT_LOG_GROUP) throw new Error("DOAX_AUDIT_LOG_GROUP not set");
+    const now = Date.now();
+    const stream = new Date().toISOString().slice(0, 10);
+    await ensureAuditStream(stream);
+    const prepared = events.map((event) => {
+        const eventId = typeof event.eventId === "string" && event.eventId ? event.eventId : randomUUID();
+        const timestamp = typeof event.timestamp === "string" && event.timestamp ? event.timestamp : new Date(now).toISOString();
+        // CloudWatch rejects far-past/future event times; clamp the LOG time, keep the true time in the body.
+        const logTime = Math.min(Math.max(Date.parse(timestamp) || now, now - 13 * 86400_000), now + 60_000);
+        return { logTime, message: JSON.stringify({ ...event, eventId, timestamp }) , eventId };
+    });
+    prepared.sort((a, b) => a.logTime - b.logTime);
+    await cw.send(
+        new PutLogEventsCommand({
+            logGroupName: AUDIT_LOG_GROUP,
+            logStreamName: stream,
+            logEvents: prepared.map((p) => ({ timestamp: p.logTime, message: p.message })),
+        }),
     );
-    return eventId;
+    return prepared.map((p) => p.eventId);
 }
 
 const IDENTITY = /^@([a-z0-9][a-z0-9._-]*)\/([a-z0-9][a-z0-9._-]*)(?:@([^@\s/]+))?$/;
@@ -156,7 +178,7 @@ app.get("/", (c) =>
             status: "ok",
             deployment: "aws",
             components: manifesto.components,
-            capabilities: ["resolve", "search", "publish", "audit-ingest"],
+            capabilities: ["resolve", "search", "publish", "audit-ingest", "audit-query"],
         }),
     ),
 );
@@ -198,7 +220,7 @@ app.get("/search", async (c) => {
          LIMIT 50`,
         [q, like, kind ?? null],
     );
-    await appendAudit({ class: "resolve", actor: "anonymous", resource: `search:${q || "*"}` });
+    await appendAudit([{ class: "resolve", actor: "anonymous", resource: `search:${q || "*"}` }]);
     const results = rows.map((row) => ({
         ...resolveBody(row),
         ns: `@${row.namespace}`,
@@ -212,21 +234,63 @@ app.get("/search", async (c) => {
     return c.json(withManifesto(DOMAIN, { query: q, results }));
 });
 
-/** Audit ingest (spec §10, §8.2). Append-only; redelivery of the same eventId is a no-op. */
+/** Audit ingest (spec §10, §8.2). Append-only; the query side dedupes redelivered eventIds. */
 app.post("/audit", async (c) => {
-    await ensureSchema();
     const body = (await c.req.json().catch(() => null)) as { events?: Record<string, unknown>[] } | null;
-    if (!body || !Array.isArray(body.events)) {
+    if (!body || !Array.isArray(body.events) || body.events.length === 0) {
         return c.json(withManifesto(DOMAIN, { error: "body must be { events: [...] }" }), 400);
     }
-    const accepted: string[] = [];
     for (const event of body.events) {
         if (typeof event.class !== "string" || typeof event.actor !== "string" || typeof event.resource !== "string") {
             return c.json(withManifesto(DOMAIN, { error: "each event needs class, actor, resource" }), 400);
         }
-        accepted.push(await appendAudit(event as Parameters<typeof appendAudit>[0]));
     }
+    const accepted = await appendAudit(body.events as AuditInput[]);
     return c.json(withManifesto(DOMAIN, { accepted }));
+});
+
+/**
+  * Audit query (spec §8.5) over the CloudWatch store. Operator-gated until permission
+  * control lands; then namespace owners see their namespace's events.
+  */
+app.get("/audit", async (c) => {
+    if (!ADMIN_TOKEN || c.req.header("x-doax-admin-token") !== ADMIN_TOKEN) {
+        return c.json(withManifesto(DOMAIN, { error: "audit query requires a valid x-doax-admin-token" }), 401);
+    }
+    const q = {
+        class: c.req.query("class"),
+        actor: c.req.query("actor"),
+        resource: c.req.query("resource"),
+        since: c.req.query("since"),
+        until: c.req.query("until"),
+        limit: Math.min(Number(c.req.query("limit") ?? 100) || 100, 1000),
+    };
+    const terms: string[] = [];
+    if (q.class) terms.push(`$.class = "${q.class.replaceAll('"', "")}"`);
+    if (q.actor) terms.push(`$.actor = "${q.actor.replaceAll('"', "")}"`);
+    if (q.resource) terms.push(`$.resource = "${q.resource.replaceAll('"', "")}*"`);
+    const out = await cw.send(
+        new FilterLogEventsCommand({
+            logGroupName: AUDIT_LOG_GROUP,
+            filterPattern: terms.length ? `{ ${terms.join(" && ")} }` : undefined,
+            startTime: q.since ? Date.parse(q.since) || undefined : undefined,
+            endTime: q.until ? Date.parse(q.until) || undefined : undefined,
+            limit: q.limit,
+        }),
+    );
+    const seen = new Set<string>();
+    const events: unknown[] = [];
+    for (const entry of out.events ?? []) {
+        try {
+            const parsed = JSON.parse(entry.message ?? "") as { eventId?: string };
+            if (parsed.eventId && seen.has(parsed.eventId)) continue;
+            if (parsed.eventId) seen.add(parsed.eventId);
+            events.push(parsed);
+        } catch {
+            /* non-JSON line; skip */
+        }
+    }
+    return c.json(withManifesto(DOMAIN, { count: events.length, truncated: Boolean(out.nextToken), events }));
 });
 
 /** Publish (spec §10, §11). Admin-token-gated until the Auth Server issues §7.2 tokens. */
@@ -276,7 +340,7 @@ app.put("/:ns{@[a-z0-9._-]+}/:namever", async (c) => {
             ContentType: "text/javascript; charset=utf-8",
         }),
     );
-    await appendAudit({ class: "publish", actor: "operator", resource: identity, digest });
+    await appendAudit([{ class: "publish", actor: "operator", resource: identity, digest }]);
     return c.json(withManifesto(DOMAIN, { published: identity, digest, package: `/${packageKey(identity)}` }), 201);
 });
 
@@ -297,7 +361,7 @@ app.get("/:ns{@[a-z0-9._-]+}/:namever", async (c) => {
     const row = rows[0];
     if (!row) return c.json(withManifesto(DOMAIN, { error: `not found: ${ref}` }), 404);
 
-    await appendAudit({ class: "resolve", actor: "anonymous", resource: `@${row.namespace}/${row.name}@${row.version}` });
+    await appendAudit([{ class: "resolve", actor: "anonymous", resource: `@${row.namespace}/${row.name}@${row.version}` }]);
     const body = resolveBody(row);
     return c.json(
         withManifesto(DOMAIN, row.lifecycle === "deprecated" ? { ...body, warning: `${body.identity} is deprecated` } : body),
