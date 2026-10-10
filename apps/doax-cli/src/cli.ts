@@ -36,14 +36,21 @@ Usage:
                                               Authenticate to a target system and cache the credential
     doax auth list                            List cached credentials by authenticator
     doax auth purge [<@ns/name>|--all]        Remove cached credentials
-    doax read <@ns/name[@version]> [--param k=v ...] [--metadata]
+    doax read <@ns/name[@version]> [--param k=v ...] [--metadata] [--secret <value>]
                                               Read a data-source (or its metadata)
-    doax execute <@ns/name[@version]> [--param k=v ...] [--dry-run] [--yes]
+    doax execute <@ns/name[@version]> [--param k=v ...] [--dry-run] [--yes] [--secret <value>]
                                               Dry-run or execute an action
     doax --version | --help
 
+Every command runs non-interactively for agent callers:
+    --json          Single JSON object on stdout/stderr; errors carry faultClass and a machine-actionable fix
+    --no-input      Never prompt (also: DOAX_NO_INPUT=1, or any non-TTY stdin)
+    --secret        Supply the authenticator secret inline when nothing is cached
+    --yes           Grant tier-2 per-call authorization without a prompt
+
 Environment:
     DOAX_REGISTRY   Registry origin (default: https://registry.doax.io). Point it at a private install.
+    DOAX_NO_INPUT   Set to 1 to force non-interactive mode.
 `;
 
 export interface CliResult {
@@ -72,7 +79,7 @@ const defaultDeps = (): CliDeps => ({
     config: loadCliConfig(process.env),
     fetch: globalThis.fetch,
     home: join(homedir(), ".doax"),
-    prompt: process.stdin.isTTY ? defaultPrompt : undefined,
+    prompt: process.stdin.isTTY && process.env.DOAX_NO_INPUT !== "1" ? defaultPrompt : undefined,
 });
 
 const executorDeps = (deps: CliDeps): ExecutorDeps => ({
@@ -96,6 +103,8 @@ export async function run(argv: string[], deps: CliDeps = defaultDeps()): Promis
             "dry-run": { type: "boolean" },
             yes: { type: "boolean", short: "y" },
             all: { type: "boolean" },
+            json: { type: "boolean" },
+            "no-input": { type: "boolean" },
         },
         allowPositionals: true,
         strict: false,
@@ -103,6 +112,9 @@ export async function run(argv: string[], deps: CliDeps = defaultDeps()): Promis
 
     if (values.version) return { exitCode: 0, stdout: VERSION };
     if (values.help || positionals.length === 0) return { exitCode: 0, stdout: USAGE };
+
+    const json = Boolean(values.json);
+    if (values["no-input"]) deps = { ...deps, prompt: undefined };
 
     const [command, ...rest] = positionals;
     try {
@@ -112,20 +124,26 @@ export async function run(argv: string[], deps: CliDeps = defaultDeps()): Promis
             case "status":
                 return await status(deps);
             case "search":
-                return await search(deps, rest.join(" "), values.kind as string | undefined);
+                return await search(deps, rest.join(" "), values.kind as string | undefined, json);
             case "resolve":
                 return await resolveCmd(deps, rest[0]);
             case "auth":
-                return await authCmd(deps, rest, values);
+                return await authCmd(deps, rest, values, json);
             case "read":
                 return await readCmd(deps, rest[0], values);
             case "execute":
-                return await executeCmd(deps, rest[0], values);
+                return await executeCmd(deps, rest[0], values, json);
             default:
                 return { exitCode: 2, stderr: `doax: unknown command "${command}"\n` + USAGE };
         }
     } catch (err) {
-        return { exitCode: 1, stderr: `doax ${command}: ${(err as Error).message} [${fault(err)}]` };
+        const detail = (err as ExecutorError).detail ?? {};
+        return {
+            exitCode: 1,
+            stderr: json
+                ? JSON.stringify({ ok: false, command, error: (err as Error).message, faultClass: fault(err), ...detail })
+                : `doax ${command}: ${(err as Error).message} [${fault(err)}]`,
+        };
     }
 }
 
@@ -152,13 +170,19 @@ async function status({ config, fetch }: CliDeps): Promise<CliResult> {
     }
 }
 
-async function search(deps: CliDeps, query: string, kind: string | undefined): Promise<CliResult> {
+async function search(deps: CliDeps, query: string, kind: string | undefined, json: boolean): Promise<CliResult> {
     const url = new URL(`${deps.config.registry}/search`);
     url.searchParams.set("q", query);
     if (kind) url.searchParams.set("kind", kind);
     const res = await deps.fetch(url);
     const body = (await res.json()) as { results?: ResolvedResource[]; error?: string };
-    if (!res.ok || !body.results) return { exitCode: 1, stderr: `doax search: ${body.error ?? res.status}` };
+    if (!res.ok || !body.results) {
+        return {
+            exitCode: 1,
+            stderr: json ? JSON.stringify({ ok: false, error: body.error ?? String(res.status) }) : `doax search: ${body.error ?? res.status}`,
+        };
+    }
+    if (json) return { exitCode: 0, stdout: JSON.stringify({ ok: true, query, results: body.results }) };
     if (body.results.length === 0) return { exitCode: 0, stdout: `no resources match "${query}"` };
     const lines = body.results.map((r) => {
         const m = r.manifest as { requiredTier?: number; summary?: string };
@@ -243,18 +267,24 @@ async function acquireCredential(deps: ExecutorDeps, authResolved: ResolvedResou
   * (§9.1 steps 4-5). No pre-auth is required: when nothing is cached and the session is
   * interactive, the auth flow runs inline, in context, and the operation continues.
   */
-async function credentialFor(deps: ExecutorDeps, resolved: ResolvedResource) {
+async function credentialFor(deps: ExecutorDeps, resolved: ResolvedResource, inlineSecret?: string) {
     const authRef = resolved.manifest.authenticator;
     if (!authRef || authRef === "none") return { credential: null, authenticator: "none" as const, effective: effectiveTierFor(resolved, null) };
     const authResolved = await resolveResource(deps, String(authRef));
     const effective = effectiveTierFor(resolved, (authResolved.manifest.requiredTier as Tier | undefined) ?? null);
     let entry = readCredentials(deps)[credentialKey(String(authRef))];
+    if (!entry && inlineSecret) {
+        entry = await acquireCredential(deps, authResolved, inlineSecret);
+    }
     if (!entry) {
         if (!deps.prompt) {
-            throw new ExecutorError(
-                `no cached credential for ${authRef}; run interactively, or: doax auth set ${String(authRef)} --secret ...`,
-                "credential-missing",
-            );
+            const auth = authResolved.manifest.authentication as { interactionDetails?: Record<string, unknown> } | undefined;
+            throw new ExecutorError(`no cached credential for ${authRef}`, "credential-missing", {
+                willRequireInteraction: true,
+                authenticator: authResolved.identity,
+                interactionDetails: auth?.interactionDetails ?? null,
+                fix: `re-run with --secret <value>, or: doax auth set ${String(authRef)} --secret <value>`,
+            });
         }
         const secret = (await deps.prompt(`${resolved.identity} needs ${authRef}\n${secretPrompt(authResolved)}`)).trim();
         if (!secret) throw new ExecutorError("no secret entered", "credential-missing");
@@ -263,13 +293,17 @@ async function credentialFor(deps: ExecutorDeps, resolved: ResolvedResource) {
     return { credential: entry.credential, authenticator: String(authRef), effective };
 }
 
-async function authCmd(deps: CliDeps, rest: string[], values: Record<string, unknown>): Promise<CliResult> {
+async function authCmd(deps: CliDeps, rest: string[], values: Record<string, unknown>, json: boolean): Promise<CliResult> {
     const [sub, refInput] = rest;
     const xdeps = executorDeps(deps);
 
     if (sub === "list") {
         const all = readCredentials(xdeps);
         const keys = Object.keys(all);
+        if (json) {
+            const entries = keys.map((k) => ({ key: k, authenticator: all[k]!.authenticator, principal: all[k]!.principal ?? {}, storedAt: all[k]!.storedAt }));
+            return { exitCode: 0, stdout: JSON.stringify({ ok: true, credentials: entries }) };
+        }
         if (keys.length === 0) return { exitCode: 0, stdout: "no cached credentials" };
         return {
             exitCode: 0,
@@ -282,11 +316,11 @@ async function authCmd(deps: CliDeps, rest: string[], values: Record<string, unk
     if (sub === "purge") {
         if (values.all) {
             purgeCredentials(xdeps);
-            return { exitCode: 0, stdout: "purged all cached credentials" };
+            return { exitCode: 0, stdout: json ? JSON.stringify({ ok: true, purged: "all" }) : "purged all cached credentials" };
         }
         if (!refInput) return { exitCode: 2, stderr: "doax auth purge: give an authenticator ref or --all" };
         writeCredential(xdeps, credentialKey(refInput), null);
-        return { exitCode: 0, stdout: `purged ${credentialKey(refInput)}` };
+        return { exitCode: 0, stdout: json ? JSON.stringify({ ok: true, purged: credentialKey(refInput) }) : `purged ${credentialKey(refInput)}` };
     }
 
     if (sub !== "set" || !refInput) return { exitCode: 2, stderr: "doax auth: expected `set <ref>`, `list`, or `purge`" };
@@ -297,10 +331,23 @@ async function authCmd(deps: CliDeps, rest: string[], values: Record<string, unk
     }
     let secret = values.secret as string | undefined;
     if (!secret && xdeps.prompt) secret = (await xdeps.prompt(secretPrompt(resolved))).trim();
-    if (!secret) return { exitCode: 2, stderr: "doax auth set: provide --secret (or run interactively)" };
+    if (!secret) {
+        const auth = resolved.manifest.authentication as { interactionDetails?: Record<string, unknown> } | undefined;
+        return {
+            exitCode: 2,
+            stderr: json
+                ? JSON.stringify({ ok: false, error: "secret required", faultClass: "credential-missing", willRequireInteraction: true, interactionDetails: auth?.interactionDetails ?? null, fix: "re-run with --secret <value>" })
+                : "doax auth set: provide --secret (or run interactively)",
+        };
+    }
 
     const entry = await acquireCredential(xdeps, resolved, secret);
-    return { exitCode: 0, stdout: `authenticated via ${resolved.identity}\nprincipal: ${JSON.stringify(entry.principal ?? {})}` };
+    return {
+        exitCode: 0,
+        stdout: json
+            ? JSON.stringify({ ok: true, authenticator: resolved.identity, principal: entry.principal ?? {} })
+            : `authenticated via ${resolved.identity}\nprincipal: ${JSON.stringify(entry.principal ?? {})}`,
+    };
 }
 
 async function readCmd(deps: CliDeps, refInput: string | undefined, values: Record<string, unknown>): Promise<CliResult> {
@@ -309,7 +356,7 @@ async function readCmd(deps: CliDeps, refInput: string | undefined, values: Reco
     const resolved = await resolveResource(xdeps, refInput);
     if (resolved.kind !== "data-source") return { exitCode: 1, stderr: `doax read: ${resolved.identity} is a ${resolved.kind}, not a data-source` };
 
-    const { credential, authenticator, effective } = await credentialFor(xdeps, resolved);
+    const { credential, authenticator, effective } = await credentialFor(xdeps, resolved, values.secret as string | undefined);
     await confirmTier(xdeps, effective, Boolean(values.yes), `read ${resolved.identity}`);
     const module = await loadPackage(xdeps, resolved);
     const operation = values.metadata ? "metadata" : "read";
@@ -329,13 +376,13 @@ async function readCmd(deps: CliDeps, refInput: string | undefined, values: Reco
     }
 }
 
-async function executeCmd(deps: CliDeps, refInput: string | undefined, values: Record<string, unknown>): Promise<CliResult> {
+async function executeCmd(deps: CliDeps, refInput: string | undefined, values: Record<string, unknown>, json: boolean): Promise<CliResult> {
     if (!refInput) return { exitCode: 2, stderr: "doax execute: missing resource reference" };
     const xdeps = executorDeps(deps);
     const resolved = await resolveResource(xdeps, refInput);
     if (resolved.kind !== "action") return { exitCode: 1, stderr: `doax execute: ${resolved.identity} is a ${resolved.kind}, not an action` };
 
-    const { credential, authenticator, effective } = await credentialFor(xdeps, resolved);
+    const { credential, authenticator, effective } = await credentialFor(xdeps, resolved, values.secret as string | undefined);
     const module = await loadPackage(xdeps, resolved);
     const input = paramsToInput(values.param);
     const dryRunMode = resolved.manifest.dryRunMode ?? "none";
@@ -350,6 +397,7 @@ async function executeCmd(deps: CliDeps, refInput: string | undefined, values: R
                     dryRun: { mode: dryRunMode as "predictive" | "native", estimated: dryRunMode === "predictive" },
                 }),
             ]);
+            if (json) return { exitCode: 0, stdout: JSON.stringify({ ok: true, estimated: dryRunMode === "predictive", mode: dryRunMode, result }) };
             const label = dryRunMode === "predictive" ? "ESTIMATED (predictive dry-run; not guaranteed by the target)" : "native dry-run";
             return { exitCode: 0, stdout: `${label}\n${JSON.stringify(result, null, 2)}` };
         } catch (err) {

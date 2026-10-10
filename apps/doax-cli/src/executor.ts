@@ -49,10 +49,13 @@ export interface ExecutorDeps {
 
 export class ExecutorError extends Error {
     readonly faultClass: string;
+    /** Machine-actionable context for non-interactive callers: what is missing and how to proceed. */
+    readonly detail: Record<string, unknown>;
 
-    constructor(message: string, faultClass: string = "undeclared") {
+    constructor(message: string, faultClass: string = "undeclared", detail: Record<string, unknown> = {}) {
         super(message);
         this.faultClass = faultClass;
+        this.detail = detail;
     }
 }
 
@@ -155,7 +158,10 @@ export function effectiveTierFor(resolved: ResolvedResource, authenticatorTier: 
 export async function confirmTier(deps: ExecutorDeps, effective: EffectiveTier, assumeYes: boolean, what: string): Promise<void> {
     if (effective.tier > 2 || assumeYes) return;
     if (!deps.prompt) {
-        throw new ExecutorError(`tier ${effective.tier} requires per-call confirmation: re-run with --yes`, "authorization-required");
+        throw new ExecutorError(`tier ${effective.tier} requires per-call confirmation: re-run with --yes`, "authorization-required", {
+            willRequireInteraction: false,
+            fix: "re-run the same command with --yes to record the caller's authorization",
+        });
     }
     const answer = (await deps.prompt(`Tier ${effective.tier}: authorize ${what}? [y/N] `)).trim().toLowerCase();
     if (answer !== "y" && answer !== "yes") throw new ExecutorError("authorization declined by the caller", "authorization-declined");
