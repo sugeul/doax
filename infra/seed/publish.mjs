@@ -126,6 +126,34 @@ const RESOURCES = [
         },
     },
     {
+        identity: "@doax/slack-list-channel@1.0.0",
+        file: "slack-list-channel.mjs",
+        manifest: {
+            kind: "data-source",
+            summary: "List the Slack channels the caller can see",
+            description:
+                "One collection: Slack channels visible to the caller's token, via conversations.list. Read params: types (public_channel, private_channel; default public), limit (default 100), cursor (continuation). The natural first read — its `id` field is the `channel` parameter of slack-channel-history and slack-post.",
+            owner: OWNER,
+            requiredTier: 3,
+            executionLocation: "caller-device",
+            authenticator: AUTHENTICATOR,
+            auditScope: ["metadata-read", "data-read"],
+            dependencies: [AUTHENTICATOR],
+            interfaceMapping: { describe: { kind: "native" }, metadata: { kind: "native" }, read: { kind: "native" } },
+            serviceLevel: {
+                expectedFaults: slackFaults(),
+                degradationBehavior: "fail fast; no partial pages are fabricated",
+                dependencyLevels: { [AUTHENTICATOR]: "per-attempt failure ~1%" },
+                measurement: "not measured",
+                supportCommitment: "none",
+                refreshCadence: "realtime",
+                tolerance: "none declared",
+                annualLatenessBudget: "best-effort (realtime source; lateness is Slack availability)",
+                latencyTarget: "read completes in < 3s p95 under normal Slack latency",
+            },
+        },
+    },
+    {
         identity: "@doax/slack-post@1.0.0",
         file: "slack-post.mjs",
         manifest: {
