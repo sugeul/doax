@@ -1,0 +1,579 @@
+<title>doax — the global registry for agent interfaces</title>
+<style>
+  :root {
+    --bg: #04070e;
+    --bg-2: #070c16;
+    --surface: #0b1220;
+    --surface-2: #0f1828;
+    --ink: #eaf1fb;
+    --muted: #91a4c2;
+    --faint: #5c7097;
+    --line: #182438;
+    --accent: #37e6d0;
+    --accent-2: #4f8dff;
+    --accent-ink: #022421;
+    --glow: rgba(55,230,208,.5);
+    --t1: #ff6b6b; --t2: #ffb454; --t3: #5ab2ff; --t4: #7c8aa5;
+    --shadow: 0 30px 80px -30px rgba(0,0,0,.8);
+    --maxw: 1140px;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0; color: var(--ink); font-family: var(--sans); line-height: 1.6;
+    -webkit-font-smoothing: antialiased; overflow-x: hidden;
+    background:
+      radial-gradient(120% 90% at 70% 10%, #0a1426 0%, #05080f 48%, #03050b 100%) fixed;
+  }
+  a { color: inherit; text-decoration: none; }
+  ::selection { background: var(--accent); color: var(--accent-ink); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
+  .wrap { width: 100%; max-width: var(--maxw); margin-inline: auto; padding-inline: 26px; }
+  .mono { font-family: var(--mono); }
+  .eyebrow {
+    font-family: var(--mono); font-size: 12px; letter-spacing: .22em; text-transform: uppercase;
+    color: var(--accent); display: inline-flex; align-items: center; gap: 10px;
+  }
+  .eyebrow::before { content:""; width: 26px; height: 1px; background: currentColor; }
+
+  /* ---------- nav ---------- */
+  header.nav {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 60;
+    backdrop-filter: blur(16px) saturate(140%); -webkit-backdrop-filter: blur(16px) saturate(140%);
+    background: linear-gradient(to bottom, rgba(4,7,14,.72), rgba(4,7,14,.15));
+    border-bottom: 1px solid rgba(255,255,255,.04);
+  }
+  .nav-in { display: flex; align-items: center; gap: 18px; height: 64px; }
+  .brand { display: flex; align-items: center; gap: 12px; font-weight: 700; letter-spacing: -.02em; font-size: 18px; }
+  .brand .ring {
+    width: 24px; height: 24px; border-radius: 50%; position: relative;
+    background: conic-gradient(from 210deg, var(--accent), var(--accent-2), var(--accent));
+    box-shadow: 0 0 18px var(--glow); mask: radial-gradient(circle 11px at 50% 50%, transparent 56%, #000 58%);
+    -webkit-mask: radial-gradient(circle 11px at 50% 50%, transparent 56%, #000 58%);
+  }
+  .brand small { font-family: var(--mono); font-size: 11px; color: var(--muted); font-weight: 500; letter-spacing: .05em; }
+  .tabs { display: flex; gap: 4px; margin-left: 6px; }
+  .tab {
+    font: inherit; font-size: 14px; color: var(--muted); background: none; border: 0; cursor: pointer;
+    padding: 8px 15px; border-radius: 10px; display: inline-flex; align-items: center; gap: 8px;
+  }
+  .tab:hover { color: var(--ink); }
+  .tab[aria-selected="true"] { color: var(--ink); background: rgba(255,255,255,.05); box-shadow: inset 0 0 0 1px var(--line); }
+  .tab .k { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 8px var(--glow); }
+  .nav-right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+  .ghost {
+    font: inherit; font-size: 13px; color: var(--muted); background: rgba(255,255,255,.03);
+    border: 1px solid var(--line); border-radius: 10px; padding: 9px 13px; cursor: pointer; display:inline-flex; gap:7px; align-items:center;
+  }
+  .ghost:hover { color: var(--ink); border-color: var(--accent); }
+  .cta {
+    font: inherit; font-size: 13px; font-weight: 700; color: var(--accent-ink);
+    background: linear-gradient(180deg, color-mix(in oklab, var(--accent) 92%, white), var(--accent));
+    border: 0; border-radius: 10px; padding: 10px 16px; cursor: pointer; box-shadow: 0 6px 20px -8px var(--glow);
+  }
+  .cta:hover { filter: brightness(1.07); }
+  @media (max-width: 760px){ .tab span, .nav-right .ghost { display: none; } }
+
+  /* ---------- scrollytelling scene ---------- */
+  #scene { position: relative; height: 560vh; }
+  .pin { position: sticky; top: 0; height: 100vh; overflow: hidden; }
+  #gl { position: absolute; inset: 0; width: 100%; height: 100%; display: block; z-index: 0; }
+  .pin::after { /* vignette to deepen the aura edges */
+    content:""; position: absolute; inset: 0; z-index: 1; pointer-events: none;
+    background: radial-gradient(70% 60% at 50% 45%, transparent 55%, rgba(2,4,9,.65) 100%);
+  }
+  .copy { position: absolute; inset: 0; z-index: 2; pointer-events: none; }
+  .panel {
+    position: absolute; left: 0; right: 0; top: 50%; transform: translateY(-50%);
+    opacity: 0; will-change: opacity, transform;
+  }
+  .panel .wrap { max-width: var(--maxw); }
+  .panel .inner { max-width: 52ch; }
+  .panel.center .inner { max-width: 40ch; margin-inline: auto; text-align: center; }
+  .panel h1 { font-size: clamp(42px, 8vw, 104px); line-height: .96; letter-spacing: -.045em; font-weight: 800; margin: 16px 0 0; text-wrap: balance; }
+  .panel h2 { font-size: clamp(30px, 5.2vw, 60px); line-height: 1.02; letter-spacing: -.035em; font-weight: 800; margin: 14px 0 0; text-wrap: balance; }
+  .panel p { color: var(--muted); font-size: clamp(16px, 1.9vw, 21px); margin-top: 18px; max-width: 60ch; }
+  .panel.center p { margin-inline: auto; }
+  .grad { color: transparent; background: linear-gradient(100deg, var(--accent), var(--accent-2)); -webkit-background-clip: text; background-clip: text; }
+  .coord {
+    display: inline-flex; margin-top: 26px; font-family: var(--mono); font-size: 14px; pointer-events: auto;
+    background: rgba(10,16,28,.6); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; backdrop-filter: blur(6px);
+  }
+  .coord .p { padding: 11px 14px; color: var(--muted); border-right: 1px solid var(--line); }
+  .coord .c { padding: 11px 14px; } .coord .c b { color: var(--accent); font-weight: 600; }
+  .scrollcue {
+    position: absolute; left: 50%; bottom: 28px; transform: translateX(-50%); z-index: 3;
+    font-family: var(--mono); font-size: 11px; letter-spacing: .2em; text-transform: uppercase; color: var(--faint);
+    display: flex; flex-direction: column; align-items: center; gap: 8px; transition: opacity .4s;
+  }
+  .scrollcue .bar { width: 1px; height: 34px; background: linear-gradient(var(--accent), transparent); animation: drop 1.8s infinite; }
+  @keyframes drop { 0%{transform:scaleY(0);transform-origin:top} 50%{transform:scaleY(1);transform-origin:top} 51%{transform-origin:bottom} 100%{transform:scaleY(0);transform-origin:bottom} }
+  .progress { position: fixed; top: 64px; left: 0; height: 2px; background: linear-gradient(90deg,var(--accent),var(--accent-2)); z-index: 60; width: 0; }
+
+  /* ---------- after-scene bands ---------- */
+  section.band { padding: 100px 0; position: relative; }
+  .sec-head { max-width: 60ch; }
+  .sec-head h2 { font-size: clamp(27px, 3.6vw, 42px); letter-spacing: -.03em; line-height: 1.07; margin: 14px 0 0; text-wrap: balance; }
+  .sec-head p { color: var(--muted); font-size: 17px; margin-top: 14px; }
+  .kinds { display: grid; grid-template-columns: repeat(4,1fr); gap: 16px; margin-top: 46px; }
+  @media (max-width: 860px){ .kinds { grid-template-columns: 1fr 1fr; } }
+  .kind {
+    background: linear-gradient(170deg, rgba(255,255,255,.04), rgba(255,255,255,.015)); border: 1px solid var(--line);
+    border-radius: 16px; padding: 24px; transition: transform .25s, border-color .25s;
+  }
+  .kind:hover { transform: translateY(-4px); border-color: color-mix(in oklab, var(--accent) 50%, var(--line)); }
+  .kind .k { font-family: var(--mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
+  .kind h3 { margin: 12px 0 8px; font-size: 19px; }
+  .kind p { color: var(--muted); font-size: 14px; margin: 0; }
+  .cta-band { text-align: center; }
+  .cta-band h2 { font-size: clamp(30px,4.4vw,52px); letter-spacing: -.035em; margin: 14px auto 0; max-width: 17ch; text-wrap: balance; }
+  .cta-row { display: flex; gap: 12px; justify-content: center; margin-top: 30px; flex-wrap: wrap; }
+
+  /* ---------- search view ---------- */
+  .search-view { min-height: 92vh; padding-top: 120px; }
+  .search-hero h2 { font-size: clamp(28px,4vw,46px); letter-spacing: -.035em; margin: 10px 0 0; }
+  .search-hero p { color: var(--muted); margin-top: 12px; max-width: 60ch; }
+  .search-field { margin-top: 26px; display: flex; align-items: center; gap: 12px; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 4px 8px 4px 16px; max-width: 640px; }
+  .search-field:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--glow); }
+  .search-field svg { color: var(--muted); flex: none; }
+  .search-field input { flex: 1; font-family: var(--mono); font-size: 15px; color: var(--ink); background: none; border: 0; padding: 13px 0; }
+  .search-field input:focus { outline: none; } .search-field input::placeholder { color: var(--faint); }
+  .filters { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; align-items: center; }
+  .filters .flabel { font-family: var(--mono); font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--faint); margin-right: 2px; }
+  .chip { font: inherit; font-size: 13px; font-family: var(--mono); color: var(--muted); background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: 6px 13px; cursor: pointer; }
+  .chip[aria-pressed="true"] { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); }
+  .chip:hover:not([aria-pressed="true"]) { color: var(--ink); border-color: var(--accent); }
+  .result-meta { margin: 26px 0 14px; font-family: var(--mono); font-size: 12px; color: var(--muted); display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .pill { font-family: var(--mono); font-size: 11px; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--line); }
+  .pill.live { color: var(--accent); border-color: color-mix(in oklab, var(--accent) 50%, var(--line)); }
+  .results { display: grid; gap: 14px; grid-template-columns: repeat(2,1fr); }
+  @media (max-width: 860px){ .results { grid-template-columns: 1fr; } }
+  .res { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 18px 20px; transition: border-color .2s, transform .2s; }
+  .res:hover { border-color: color-mix(in oklab, var(--accent) 50%, var(--line)); transform: translateY(-2px); }
+  .res .coordline { font-family: var(--mono); font-size: 14.5px; }
+  .res .coordline .ns { color: var(--muted); } .res .coordline .nm { color: var(--ink); font-weight: 600; } .res .coordline .ver { color: var(--accent); }
+  .res .sum { color: var(--muted); font-size: 14px; margin: 9px 0 14px; }
+  .res .badges { display: flex; gap: 7px; flex-wrap: wrap; }
+  .badge { font-family: var(--mono); font-size: 11px; padding: 3px 9px; border-radius: 7px; border: 1px solid var(--line); color: var(--muted); display:inline-flex; gap:6px; align-items:center; }
+  .badge .d { width: 6px; height: 6px; border-radius: 50%; }
+  .badge.kind { color: var(--accent); border-color: color-mix(in oklab, var(--accent) 40%, var(--line)); }
+  .badge.verok { color: #37e6b0; }
+  .empty { grid-column: 1/-1; text-align: center; color: var(--muted); padding: 52px; border: 1px dashed var(--line); border-radius: 14px; }
+
+  footer { border-top: 1px solid var(--line); padding: 54px 0 80px; color: var(--muted); font-size: 14px; }
+  .foot-grid { display: flex; gap: 40px; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; }
+  .foot-ep { font-family: var(--mono); font-size: 13px; } .foot-ep a { color: var(--accent); }
+  .foot-links { display: flex; gap: 26px; flex-wrap: wrap; }
+  [hidden] { display: none !important; }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } .scrollcue .bar { animation: none; } }
+</style>
+
+<div class="progress" id="progress"></div>
+<header class="nav">
+  <div class="wrap nav-in">
+    <a class="brand" href="#" id="brandHome"><span class="ring" aria-hidden="true"></span> doax <small>Day One AX</small></a>
+    <nav class="tabs" role="tablist" aria-label="Primary">
+      <button class="tab" role="tab" id="tab-home" aria-selected="true" aria-controls="view-home"><span class="k" aria-hidden="true"></span>Home</button>
+      <button class="tab" role="tab" id="tab-search" aria-selected="false" aria-controls="view-search">Search<span>&nbsp;the registry</span></button>
+    </nav>
+    <div class="nav-right">
+      <a class="ghost" href="https://registry.doax.io" target="_blank" rel="noopener">registry.doax.io ↗</a>
+      <button class="cta" id="getStarted">Get started</button>
+    </div>
+  </div>
+</header>
+
+<main>
+<div id="view-home" role="tabpanel" aria-labelledby="tab-home">
+  <section id="scene">
+    <div class="pin">
+      <canvas id="gl" aria-hidden="true"></canvas>
+      <div class="copy" id="copy">
+        <article class="panel center" data-i="0">
+          <div class="wrap"><div class="inner">
+            <span class="eyebrow" style="justify-content:center;">The global registry for agents</span>
+            <h1>doax</h1>
+            <p>The catalog of what AI agents may <span class="grad">do on your behalf</span>.</p>
+            <div class="coord"><span class="p">resolve</span><span class="c"><b>@corp</b>/orders<b>@3.1.0</b></span></div>
+          </div></div>
+        </article>
+        <article class="panel" data-i="1">
+          <div class="wrap"><div class="inner">
+            <span class="eyebrow">Aim 01 — Legibility</span>
+            <h2>Make your work legible to agents.</h2>
+            <p>Publish your data and actions as versioned, namespaced resources — the npm model, for AI. One catalog an agent can actually read.</p>
+          </div></div>
+        </article>
+        <article class="panel" data-i="2">
+          <div class="wrap"><div class="inner">
+            <span class="eyebrow">Aim 02 — Visibility</span>
+            <h2>See <span class="grad">everything</span>.</h2>
+            <p>Every access and execution becomes a definitive, non-restorable audit event. Nothing an agent does for you is invisible, and nothing can be edited away.</p>
+          </div></div>
+        </article>
+        <article class="panel" data-i="3">
+          <div class="wrap"><div class="inner">
+            <span class="eyebrow">Aim 03 — Control</span>
+            <h2>Keep control.</h2>
+            <p>Every resource declares the authentication tier it demands — and downstream, that demand can only be <span class="grad">strengthened, never weakened</span>.</p>
+          </div></div>
+        </article>
+        <article class="panel center" data-i="4">
+          <div class="wrap"><div class="inner">
+            <span class="eyebrow" style="justify-content:center;">Aim 04 — Continuity</span>
+            <h2>One continuous loop.</h2>
+            <p>A durable public registry and a one-click private one. Resolve and audit. Two rings — one <span class="grad">infinity</span>.</p>
+            <div class="cta-row" style="margin-top:26px;pointer-events:auto;">
+              <button class="cta" id="heroSearch">Search the catalog</button>
+              <a class="ghost" href="https://registry.doax.io/manifesto.json" target="_blank" rel="noopener">Manifesto ↗</a>
+            </div>
+          </div></div>
+        </article>
+      </div>
+      <div class="scrollcue" id="scrollcue"><span>scroll</span><span class="bar"></span></div>
+    </div>
+  </section>
+
+  <section class="band">
+    <div class="wrap">
+      <div class="sec-head">
+        <span class="eyebrow">Everything is a resource</span>
+        <h2>Four kinds, one governance model.</h2>
+        <p>Data sources, actions, execution places, and credential flows are all published, versioned, made visible, verified, tiered, and audited by the same rules.</p>
+      </div>
+      <div class="kinds">
+        <div class="kind"><span class="k">data-source</span><h3>Read</h3><p>One collection an agent reads. The source decides what the caller sees — the registry never shapes data.</p></div>
+        <div class="kind"><span class="k">action</span><h3>Do</h3><p>An effect in an external system, with declared dry-run, idempotency, and a recovery action.</p></div>
+        <div class="kind"><span class="k">executor</span><h3>Run</h3><p>An org-operated machine for work that can't run on the caller's device, with org-held credentials.</p></div>
+        <div class="kind"><span class="k">authenticator</span><h3>Log in</h3><p>How one target system is authenticated — shared, so a caller logs in once.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="band cta-band">
+    <div class="wrap">
+      <span class="eyebrow" style="justify-content:center;">Start on day one</span>
+      <h2>Make your organisation legible — and controllable — to agents.</h2>
+      <div class="cta-row">
+        <button class="cta" id="cta2">Search the catalog</button>
+        <a class="ghost" href="https://registry.doax.io" target="_blank" rel="noopener">registry.doax.io ↗</a>
+      </div>
+    </div>
+  </section>
+</div>
+
+<div id="view-search" role="tabpanel" aria-labelledby="tab-search" hidden>
+  <div class="wrap search-view">
+    <div class="search-hero">
+      <span class="eyebrow">Search · the registry</span>
+      <h2>Find a resource.</h2>
+      <p>Query by name, namespace, or what it does. Filter by kind and tier. Results resolve from <span class="mono">registry.doax.io</span> when the live search API is available.</p>
+    </div>
+    <label class="search-field">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+      <input id="q" type="search" placeholder="@corp/orders · book a train · erp refresh" autocomplete="off" spellcheck="false" />
+    </label>
+    <div class="filters" id="kindFilters">
+      <span class="flabel">kind</span>
+      <button class="chip" data-kind="all" aria-pressed="true">all</button>
+      <button class="chip" data-kind="data-source" aria-pressed="false">data-source</button>
+      <button class="chip" data-kind="action" aria-pressed="false">action</button>
+      <button class="chip" data-kind="executor" aria-pressed="false">executor</button>
+      <button class="chip" data-kind="authenticator" aria-pressed="false">authenticator</button>
+    </div>
+    <div class="filters" id="tierFilters">
+      <span class="flabel">tier</span>
+      <button class="chip" data-tier="all" aria-pressed="true">all</button>
+      <button class="chip" data-tier="1" aria-pressed="false">1</button>
+      <button class="chip" data-tier="2" aria-pressed="false">2</button>
+      <button class="chip" data-tier="3" aria-pressed="false">3</button>
+      <button class="chip" data-tier="4" aria-pressed="false">4</button>
+    </div>
+    <div class="result-meta"><span id="count">—</span><span class="pill ex" id="source">example catalog</span></div>
+    <div class="results" id="results"></div>
+  </div>
+</div>
+</main>
+
+<footer>
+  <div class="wrap foot-grid">
+    <div>
+      <div class="brand" style="font-size:16px;"><span class="ring" aria-hidden="true"></span> doax</div>
+      <p style="max-width:34ch;margin:14px 0 0;">The registry of data and action resources that AI agents use on behalf of a human.</p>
+      <div class="foot-ep" style="margin-top:14px;">API · <a href="https://registry.doax.io" target="_blank" rel="noopener">registry.doax.io</a></div>
+    </div>
+    <div class="foot-links">
+      <a href="#" id="footHome">Home</a>
+      <a href="https://registry.doax.io" target="_blank" rel="noopener">Registry API ↗</a>
+      <a href="https://registry.doax.io/manifesto.json" target="_blank" rel="noopener">Manifesto ↗</a>
+    </div>
+  </div>
+</footer>
+
+<script id="vert" type="x-shader/x-vertex">
+attribute vec2 a_pos;
+void main(){ gl_Position = vec4(a_pos, 0.0, 1.0); }
+</script>
+<script id="frag" type="x-shader/x-fragment">
+precision highp float;
+uniform vec2 u_res;
+uniform float u_time;
+uniform float u_scroll;
+uniform float u_vel;
+
+mat3 rotY(float a){ float c=cos(a), s=sin(a); return mat3(c,0.0,-s, 0.0,1.0,0.0, s,0.0,c); }
+mat3 rotX(float a){ float c=cos(a), s=sin(a); return mat3(1.0,0.0,0.0, 0.0,c,-s, 0.0,s,c); }
+mat3 rotZ(float a){ float c=cos(a), s=sin(a); return mat3(c,-s,0.0, s,c,0.0, 0.0,0.0,1.0); }
+
+float smin(float a, float b, float k){
+  float h = clamp(0.5 + 0.5*(b-a)/k, 0.0, 1.0);
+  return mix(b, a, h) - k*h*(1.0-h);
+}
+float sdTorus(vec3 p, vec2 t){
+  vec2 q = vec2(length(p.xz) - t.x, p.y);
+  return length(q) - t.y;
+}
+
+float gMorph;
+float map(vec3 p){
+  float m = gMorph;                 // 0 = single doughnut, 1 = infinity
+  float d = mix(0.0, 1.02, m);      // separation of the two rings
+  float R = mix(1.30, 0.92, m);     // major radius shrinks as it splits
+  float r = mix(0.40, 0.38, m);     // tube radius
+  float a = sdTorus(p - vec3(d, 0.0, 0.0), vec2(R, r));
+  float b = sdTorus(p + vec3(d, 0.0, 0.0), vec2(R, r));
+  return smin(a, b, 0.5 + 0.25*m);
+}
+vec3 calcNormal(vec3 p){
+  vec2 e = vec2(0.0012, 0.0);
+  return normalize(vec3(
+    map(p+e.xyy) - map(p-e.xyy),
+    map(p+e.yxy) - map(p-e.yxy),
+    map(p+e.yyx) - map(p-e.yyx)));
+}
+
+void main(){
+  vec2 uv = (gl_FragCoord.xy - 0.5*u_res) / u_res.y;
+  gMorph = smoothstep(0.40, 0.94, u_scroll);
+
+  vec3 ro = vec3(0.0, 0.0, 4.6);
+  vec3 rd = normalize(vec3(uv, -1.7));
+
+  // Default motion and scroll motion live on different axes, so scroll adds a
+  // distinct movement instead of accelerating the same spin.
+  float spin  = u_time*0.22;                    // default: continuous Y rotation
+  float tiltX = 0.42 + u_scroll*3.14159;        // scroll: smooth reorient on X (position-driven, no bounce)
+  float tiltZ = 0.10*sin(u_time*0.2);           // gentle idle wobble
+  mat3 rot = rotZ(tiltZ) * rotX(tiltX) * rotY(spin);
+  ro = rot * ro; rd = rot * rd;
+  ro.y -= sin(u_time*0.6)*0.12;     // idle float
+
+  float t = 0.0, glow = 0.0;
+  bool hit = false; vec3 p = ro;
+  for(int i=0;i<110;i++){
+    p = ro + rd*t;
+    float d = map(p);
+    glow += exp(-abs(d)*6.5);
+    if(d < 0.0012){ hit = true; break; }
+    t += d*0.82;
+    if(t > 13.0) break;
+  }
+
+  float vig = length(uv);
+  vec3 bg = mix(vec3(0.015,0.045,0.095), vec3(0.004,0.009,0.028), smoothstep(0.0,1.15,vig));
+  vec3 col = bg;
+
+  if(hit){
+    vec3 n = calcNormal(p);
+    vec3 v = normalize(-rd);
+    vec3 L = normalize(vec3(0.55, 0.85, 0.45));
+    float diff = max(dot(n,L), 0.0);
+    float fres = pow(1.0 - max(dot(n,v),0.0), 3.0);
+    float spec = pow(max(dot(reflect(-L,n), v), 0.0), 48.0);
+    vec3 glassA = vec3(0.04, 0.22, 0.46);
+    vec3 glassB = vec3(0.12, 0.78, 0.74);
+    vec3 base = mix(glassA, glassB, fres);
+    col = base*(0.22 + 0.55*diff);
+    col += vec3(1.0)*spec*0.9;
+    col += fres*vec3(0.22,0.65,0.95)*1.0;
+    col += vec3(0.02,0.30,0.5)*0.35;      // inner translucency
+  }
+  col += glow*0.018 * vec3(0.10,0.55,0.85);   // volumetric halo = the aura
+
+  col = col/(1.0+col);               // reinhard tone map
+  col = pow(col, vec3(0.86));        // gamma
+  gl_FragColor = vec4(col, 1.0);
+}
+</script>
+<script>
+(function(){
+  "use strict";
+  var reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  var running = true;
+
+  /* ---------------- tabs ---------------- */
+  var tabHome = document.getElementById("tab-home"), tabSearch = document.getElementById("tab-search");
+  var viewHome = document.getElementById("view-home"), viewSearch = document.getElementById("view-search");
+  function show(which){
+    var s = which === "search";
+    tabSearch.setAttribute("aria-selected", s?"true":"false");
+    tabHome.setAttribute("aria-selected", s?"false":"true");
+    viewSearch.hidden = !s; viewHome.hidden = s;
+    window.scrollTo({ top:0, behavior:"auto" });
+    running = !s;
+    if (s) { var q=document.getElementById("q"); if(q) q.focus(); }
+    else if (!reduce) requestAnimationFrame(frame);
+  }
+  tabHome.addEventListener("click", function(){ show("home"); });
+  tabSearch.addEventListener("click", function(){ show("search"); });
+  document.getElementById("brandHome").addEventListener("click", function(e){ e.preventDefault(); show("home"); });
+  document.getElementById("footHome").addEventListener("click", function(e){ e.preventDefault(); show("home"); });
+  ["heroSearch","getStarted","cta2"].forEach(function(id){ var e=document.getElementById(id); if(e) e.addEventListener("click", function(){ show("search"); }); });
+
+  /* ---------------- scroll progress + panels ---------------- */
+  var scene = document.getElementById("scene");
+  var panels = [].slice.call(document.querySelectorAll(".panel"));
+  var cue = document.getElementById("scrollcue");
+  var prog = document.getElementById("progress");
+  var scrollP = 0, targetVel = 0, lastY = window.scrollY;
+
+  function computeScroll(){
+    var total = scene.offsetHeight - window.innerHeight;
+    var passed = Math.min(Math.max(-scene.getBoundingClientRect().top, 0), total);
+    scrollP = total > 0 ? passed/total : 0;
+    var dy = window.scrollY - lastY; lastY = window.scrollY;
+    targetVel += Math.min(Math.abs(dy)*0.012, 1.2);
+    prog.style.width = (scrollP*100).toFixed(2) + "%";
+    cue.style.opacity = scrollP > 0.03 ? "0" : "1";
+    var N = panels.length;
+    for (var i=0;i<N;i++){
+      var center = i/(N-1);
+      var dist = Math.abs(scrollP - center);
+      var o = Math.max(0, 1 - dist/0.16);
+      o = o*o*(3-2*o);
+      panels[i].style.opacity = o.toFixed(3);
+      panels[i].style.transform = "translateY(" + (-50 + (scrollP-center)*-34) + "%)";
+      panels[i].style.pointerEvents = o > 0.6 ? "auto" : "none";
+    }
+  }
+  window.addEventListener("scroll", computeScroll, { passive:true });
+  window.addEventListener("resize", function(){ resize(); computeScroll(); });
+  computeScroll();
+
+  /* ---------------- WebGL glass torus ⇄ infinity ---------------- */
+  var canvas = document.getElementById("gl");
+  var gl = canvas.getContext("webgl") || canvas.getContext("experimental-webgl");
+  var DPR = Math.min(window.devicePixelRatio||1, 1.75);
+  var prog3d = null, uRes, uTime, uScroll, uVel, vel = 0, start = performance.now();
+
+  function compile(type, src){
+    var sh = gl.createShader(type); gl.shaderSource(sh, src); gl.compileShader(sh);
+    if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) { console.error(gl.getShaderInfoLog(sh)); return null; }
+    return sh;
+  }
+  function initGL(){
+    if (!gl) return false;
+    var vs = compile(gl.VERTEX_SHADER, document.getElementById("vert").textContent);
+    var fs = compile(gl.FRAGMENT_SHADER, document.getElementById("frag").textContent);
+    if (!vs || !fs) return false;
+    prog3d = gl.createProgram();
+    gl.attachShader(prog3d, vs); gl.attachShader(prog3d, fs); gl.linkProgram(prog3d);
+    if (!gl.getProgramParameter(prog3d, gl.LINK_STATUS)) { console.error(gl.getProgramInfoLog(prog3d)); return false; }
+    gl.useProgram(prog3d);
+    var buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), gl.STATIC_DRAW);
+    var loc = gl.getAttribLocation(prog3d, "a_pos");
+    gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+    uRes = gl.getUniformLocation(prog3d, "u_res");
+    uTime = gl.getUniformLocation(prog3d, "u_time");
+    uScroll = gl.getUniformLocation(prog3d, "u_scroll");
+    uVel = gl.getUniformLocation(prog3d, "u_vel");
+    return true;
+  }
+  function resize(){
+    if (!gl) return;
+    var w = canvas.clientWidth, h = canvas.clientHeight;
+    canvas.width = Math.round(w*DPR); canvas.height = Math.round(h*DPR);
+    gl.viewport(0,0,canvas.width,canvas.height);
+  }
+  function frame(){
+    if (!running || !gl || !prog3d) return;
+    vel += (targetVel - vel)*0.1; targetVel *= 0.9;
+    var tsec = (performance.now()-start)/1000;
+    gl.uniform2f(uRes, canvas.width, canvas.height);
+    gl.uniform1f(uTime, reduce ? 0 : tsec);
+    gl.uniform1f(uScroll, scrollP);
+    gl.uniform1f(uVel, reduce ? 0 : vel);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    requestAnimationFrame(frame);
+  }
+
+  if (initGL()) {
+    resize();
+    requestAnimationFrame(frame);
+  } else {
+    // Fallback: honour the dark aura; show text without 3D.
+    canvas.style.background = "radial-gradient(60% 50% at 60% 42%, #0c2740, #05080f 70%)";
+    panels.forEach(function(p){ p.style.opacity = 1; });
+  }
+
+  /* ---------------- search ---------------- */
+  var CATALOG = [
+    { ns:"@koreanmate", name:"train-book", ver:"1.4.0", kind:"action", tier:1, loc:"caller-device", vok:true, sum:"Book a rail ticket on the carrier site. Predictive dry-run; keyed idempotency on the booking reference." },
+    { ns:"@koreanmate", name:"train-cancel", ver:"1.2.0", kind:"action", tier:1, loc:"caller-device", vok:true, sum:"Cancel a booked rail ticket — the compensating recovery action for train-book." },
+    { ns:"@koreanmate", name:"carrier-login", ver:"1.0.3", kind:"authenticator", tier:1, loc:"caller-device", vok:true, sum:"Browser login to the rail carrier. Subject personal; one cached session shared by every carrier resource." },
+    { ns:"@corp", name:"orders", ver:"3.1.0", kind:"data-source", tier:2, loc:"trusted-executor", vok:true, sum:"The orders collection exported from the ERP. Caller-relative schema; refreshes daily by 06:00." },
+    { ns:"@corp", name:"purchase-orders", ver:"2.4.1", kind:"data-source", tier:2, loc:"trusted-executor", vok:true, sum:"Purchase orders — a separate collection with its own tier and refresh cadence." },
+    { ns:"@corp", name:"erp-refresh", ver:"2.0.0", kind:"action", tier:3, loc:"trusted-executor", vok:true, sum:"Refresh the ERP export into the internal store. Idempotent per date window; runs unattended." },
+    { ns:"@corp", name:"erp-service-account", ver:"1.1.0", kind:"authenticator", tier:3, loc:"trusted-executor", vok:true, sum:"Organisation service-account login to the ERP. Secret-entry, performed once on the batch machine." },
+    { ns:"@corp", name:"batch-01", ver:"1.0.0", kind:"executor", tier:2, loc:"—", vok:true, sum:"Batch machine with internal-ERP reach and a concurrency limit of 4. Runs @corp trusted-executor work." },
+    { ns:"@doax", name:"web-fetch", ver:"0.9.0", kind:"data-source", tier:4, loc:"caller-device", vok:false, sum:"Fetch a public web page as a record. No authentication; open tier, still audited." },
+    { ns:"@gov", name:"transit-arrivals", ver:"1.0.0", kind:"data-source", tier:4, loc:"caller-device", vok:true, sum:"Live public transit arrivals for a stop. Refreshes every 30 seconds." },
+    { ns:"@doax", name:"calendar-create", ver:"1.3.2", kind:"action", tier:1, loc:"caller-device", vok:true, sum:"Create a calendar event on the caller's Google account. Human-in-the-loop gate available." },
+    { ns:"@doax", name:"google-login", ver:"2.0.1", kind:"authenticator", tier:1, loc:"caller-device", vok:true, sum:"Google sign-in. Serves mail, calendar and drive resources alike from one cached credential." }
+  ];
+  var TIERCOL = {1:"var(--t1)",2:"var(--t2)",3:"var(--t3)",4:"var(--t4)"};
+  var state = { q:"", kind:"all", tier:"all", live:false, items:CATALOG };
+  function esc(s){ return String(s).replace(/[&<>]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;"}[c];}); }
+  function render(){
+    var q = state.q.trim().toLowerCase();
+    var list = state.items.filter(function(r){
+      if (state.kind!=="all" && r.kind!==state.kind) return false;
+      if (state.tier!=="all" && String(r.tier)!==state.tier) return false;
+      if (!q) return true;
+      return (r.ns+"/"+r.name+" "+r.sum+" "+r.kind).toLowerCase().indexOf(q) >= 0;
+    });
+    document.getElementById("count").textContent = list.length + (list.length===1?" resource":" resources");
+    var src = document.getElementById("source");
+    src.textContent = state.live ? "live · registry.doax.io" : "example catalog";
+    src.className = "pill " + (state.live?"live":"ex");
+    var el = document.getElementById("results");
+    if (!list.length){ el.innerHTML = '<div class="empty">No resource matches <span class="mono">'+esc(state.q)+'</span>. Try <span class="mono">@corp</span> or a kind.</div>'; return; }
+    el.innerHTML = list.map(function(r){
+      return '<article class="res"><div class="coordline"><span class="ns">'+esc(r.ns)+'/</span><span class="nm">'+esc(r.name)+'</span><span class="ver">@'+esc(r.ver)+'</span></div>'
+        + '<p class="sum">'+esc(r.sum)+'</p><div class="badges">'
+        + '<span class="badge kind">'+esc(r.kind)+'</span>'
+        + '<span class="badge"><span class="d" style="background:'+TIERCOL[r.tier]+'"></span>tier '+r.tier+'</span>'
+        + (r.loc!=="—" ? '<span class="badge">'+esc(r.loc)+'</span>' : '')
+        + '<span class="badge '+(r.vok?"verok":"")+'">'+(r.vok?"✓ verified":"unverified")+'</span>'
+        + '</div></article>';
+    }).join("");
+  }
+  var liveTimer;
+  function tryLive(q){
+    clearTimeout(liveTimer);
+    liveTimer = setTimeout(function(){
+      fetch("https://registry.doax.io/search?q="+encodeURIComponent(q||""), { headers:{accept:"application/json"} })
+        .then(function(r){ if(!r.ok) throw 0; return r.json(); })
+        .then(function(d){ if(d&&Array.isArray(d.results)&&d.results.length){ state.items=d.results; state.live=true; render(); } })
+        .catch(function(){});
+    }, 350);
+  }
+  document.getElementById("q").addEventListener("input", function(e){ state.q=e.target.value; render(); tryLive(e.target.value); });
+  function wire(id,key){ document.getElementById(id).addEventListener("click", function(e){ var b=e.target.closest(".chip"); if(!b)return; [].forEach.call(this.querySelectorAll(".chip"),function(c){c.setAttribute("aria-pressed","false");}); b.setAttribute("aria-pressed","true"); state[key]=b.getAttribute("data-"+key); render(); }); }
+  wire("kindFilters","kind"); wire("tierFilters","tier");
+  render();
+})();
+</script>
