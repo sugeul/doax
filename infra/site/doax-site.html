@@ -131,6 +131,30 @@
   .cta-band h2 { font-size: clamp(30px,4.4vw,52px); letter-spacing: -.035em; margin: 14px auto 0; max-width: 17ch; text-wrap: balance; }
   .cta-row { display: flex; gap: 12px; justify-content: center; margin-top: 30px; flex-wrap: wrap; }
 
+  /* install guide */
+  .cmd {
+    margin-top: 40px; display: flex; align-items: center; gap: 14px; max-width: 640px;
+    font-family: var(--mono); font-size: 15px; background: var(--surface); border: 1px solid var(--line);
+    border-radius: 13px; padding: 16px 18px; overflow-x: auto;
+  }
+  .cmd .p { color: var(--accent); user-select: none; }
+  .cmd code { color: var(--ink); white-space: nowrap; }
+  .cmd .copy {
+    margin-left: auto; font: inherit; font-size: 12px; color: var(--muted); background: var(--surface-2);
+    border: 1px solid var(--line); border-radius: 8px; padding: 6px 12px; cursor: pointer; flex: none;
+  }
+  .cmd .copy:hover { color: var(--ink); border-color: var(--accent); }
+  .cmd .copy.done { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); }
+  .quickstart { margin-top: 18px; display: grid; gap: 8px; max-width: 860px; }
+  .qs {
+    display: flex; align-items: baseline; gap: 12px; font-family: var(--mono); font-size: 13.5px;
+    background: rgba(255,255,255,.02); border: 1px solid var(--line); border-radius: 10px; padding: 11px 16px; overflow-x: auto;
+  }
+  .qs .p { color: var(--accent); user-select: none; }
+  .qs code { color: var(--ink); white-space: nowrap; }
+  .qs .qc { margin-left: auto; color: var(--faint); font-family: var(--sans); font-size: 12.5px; white-space: nowrap; padding-left: 18px; }
+  @media (max-width: 760px){ .qs .qc { display: none; } }
+
   /* ---------- search view ---------- */
   .search-view { min-height: 92vh; padding-top: 120px; }
   .search-hero h2 { font-size: clamp(28px,4vw,46px); letter-spacing: -.035em; margin: 10px 0 0; }
@@ -227,7 +251,8 @@
             <h2>One continuous loop.</h2>
             <p>A durable public registry and a one-click private one. Resolve and audit. Two rings — one <span class="grad">infinity</span>.</p>
             <div class="cta-row" style="margin-top:26px;pointer-events:auto;">
-              <button class="cta" id="heroSearch">Search the catalog</button>
+              <a class="cta" href="#install" style="text-decoration:none;">Install the CLI</a>
+              <button class="ghost" id="heroSearch">Search the catalog</button>
               <a class="ghost" href="https://registry.doax.io/manifesto.json" target="_blank" rel="noopener">Manifesto ↗</a>
             </div>
           </div></div>
@@ -253,12 +278,38 @@
     </div>
   </section>
 
+  <!-- install guide -->
+  <section class="band" id="install">
+    <div class="wrap">
+      <div class="sec-head">
+        <span class="eyebrow">Install · one line</span>
+        <h2>Get the CLI. Use a resource in five minutes.</h2>
+        <p>The <span class="mono">doax</span> CLI is the executor: it resolves resources, verifies integrity, runs the authentication tier each resource demands, and records every access in the audit log. Linux or macOS, Node ≥ 20, nothing else.</p>
+      </div>
+      <div class="cmd" id="installCmd">
+        <span class="p">$</span>
+        <code>curl -fsSL https://doax.io/install.sh | bash</code>
+        <button class="copy" id="copyInstall" aria-label="Copy install command">copy</button>
+      </div>
+      <div class="quickstart">
+        <div class="qs"><span class="p">$</span><code>doax search slack</code><span class="qc">find something to use</span></div>
+        <div class="qs"><span class="p">$</span><code>doax read @doax/slack-channel-history --param channel=C0123456789</code><span class="qc">asks for your Slack token in context, then reads</span></div>
+        <div class="qs"><span class="p">$</span><code>doax execute @doax/slack-post --param channel=C0123456789 --param text="hello" --dry-run</code><span class="qc">preview with zero side effects, then drop --dry-run</span></div>
+      </div>
+      <div class="hero-cta" style="margin-top:26px;">
+        <a class="cta" href="/install" style="text-decoration:none;">Full install guide →</a>
+        <a class="ghost" href="/install.sh">view install.sh</a>
+      </div>
+    </div>
+  </section>
+
   <section class="band cta-band">
     <div class="wrap">
       <span class="eyebrow" style="justify-content:center;">Start on day one</span>
       <h2>Make your organisation legible — and controllable — to agents.</h2>
       <div class="cta-row">
-        <button class="cta" id="cta2">Search the catalog</button>
+        <a class="cta" href="/install" style="text-decoration:none;">Install the CLI</a>
+        <button class="ghost" id="cta2">Search the catalog</button>
         <a class="ghost" href="https://registry.doax.io" target="_blank" rel="noopener">registry.doax.io ↗</a>
       </div>
     </div>
@@ -433,6 +484,16 @@ void main(){
   document.getElementById("brandHome").addEventListener("click", function(e){ e.preventDefault(); show("home"); });
   document.getElementById("footHome").addEventListener("click", function(e){ e.preventDefault(); show("home"); });
   ["heroSearch","getStarted","cta2"].forEach(function(id){ var e=document.getElementById(id); if(e) e.addEventListener("click", function(){ show("search"); }); });
+
+  /* ---------------- install one-liner copy ---------------- */
+  var copyBtn = document.getElementById("copyInstall");
+  if (copyBtn) copyBtn.addEventListener("click", function(){
+    var cmd = document.querySelector("#installCmd code").textContent;
+    (navigator.clipboard ? navigator.clipboard.writeText(cmd) : Promise.reject()).then(function(){
+      copyBtn.textContent = "copied"; copyBtn.classList.add("done");
+      setTimeout(function(){ copyBtn.textContent = "copy"; copyBtn.classList.remove("done"); }, 1600);
+    }).catch(function(){ copyBtn.textContent = cmd; });
+  });
 
   /* ---------------- scroll progress + panels ---------------- */
   var scene = document.getElementById("scene");
