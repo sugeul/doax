@@ -72,7 +72,13 @@ const RESOURCES = [
                 targetSystem: "Slack Web API (https://slack.com/api)",
                 subject: "personal",
                 interactionKinds: ["secret-entry"],
-                interactionDetails: { "secret-entry": "paste a Slack user (xoxp-) or bot (xoxb-) token; verified via auth.test" },
+                interactionDetails: {
+                    "secret-entry": {
+                        instruction: "paste a Slack user (xoxp-) or bot (xoxb-) token; verified via auth.test",
+                        entryPoint: "https://api.slack.com/apps — open your app → OAuth & Permissions → Bot/User OAuth Token",
+                        docs: "https://api.slack.com/authentication/token-types",
+                    },
+                },
                 credentialMaterial: "bearer token",
                 lifetime: { period: "unknown", refreshable: false },
                 verificationMethod: "auth.test (no side effects)",
@@ -154,9 +160,11 @@ const RESOURCES = [
 
 for (const resource of RESOURCES) {
     const pkg = await readFile(join(here, "packages", resource.file));
+    const headers = { "content-type": "application/json", "x-doax-admin-token": token };
+    if (process.env.DOAX_FORCE === "1") headers["x-doax-admin-force"] = "true"; // pre-public re-seed only
     const res = await fetch(`${registry}/${resource.identity}`, {
         method: "PUT",
-        headers: { "content-type": "application/json", "x-doax-admin-token": token },
+        headers,
         body: JSON.stringify({ manifest: resource.manifest, package: pkg.toString("base64") }),
     });
     const body = await res.json().catch(() => ({}));

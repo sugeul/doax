@@ -190,6 +190,26 @@ function paramsToInput(params: unknown): Record<string, unknown> {
     return input;
 }
 
+/**
+  * The authentication specification's interaction details (§4.7.1) tell the caller where to
+  * obtain the secret; the CLI must display that entry point when it asks.
+  */
+function secretPrompt(authResolved: ResolvedResource): string {
+    const spec = authResolved.manifest.authentication as
+        | { interactionDetails?: Record<string, string | { instruction?: string; entryPoint?: string; docs?: string }> }
+        | undefined;
+    const details = spec?.interactionDetails?.["secret-entry"];
+    const lines: string[] = [];
+    if (typeof details === "string") lines.push(`  how: ${details}`);
+    else if (details) {
+        if (details.instruction) lines.push(`  how: ${details.instruction}`);
+        if (details.entryPoint) lines.push(`  get one: ${details.entryPoint}`);
+        if (details.docs) lines.push(`  docs: ${details.docs}`);
+    }
+    lines.push(`secret for ${authResolved.identity} (input is echoed): `);
+    return lines.join("\n");
+}
+
 /** Run the Authenticator's flow (§4.7): collect the secret, authenticate, cache, audit. */
 async function acquireCredential(deps: ExecutorDeps, authResolved: ResolvedResource, secret: string) {
     const module = await loadPackage(deps, authResolved);
@@ -236,7 +256,7 @@ async function credentialFor(deps: ExecutorDeps, resolved: ResolvedResource) {
                 "credential-missing",
             );
         }
-        const secret = (await deps.prompt(`${resolved.identity} needs ${authRef}\nsecret for ${authResolved.identity} (input is echoed): `)).trim();
+        const secret = (await deps.prompt(`${resolved.identity} needs ${authRef}\n${secretPrompt(authResolved)}`)).trim();
         if (!secret) throw new ExecutorError("no secret entered", "credential-missing");
         entry = await acquireCredential(deps, authResolved, secret);
     }
@@ -276,7 +296,7 @@ async function authCmd(deps: CliDeps, rest: string[], values: Record<string, unk
         return { exitCode: 1, stderr: `doax auth set: ${resolved.identity} is a ${resolved.kind}, not an authenticator` };
     }
     let secret = values.secret as string | undefined;
-    if (!secret && xdeps.prompt) secret = (await xdeps.prompt(`secret for ${resolved.identity} (input is echoed): `)).trim();
+    if (!secret && xdeps.prompt) secret = (await xdeps.prompt(secretPrompt(resolved))).trim();
     if (!secret) return { exitCode: 2, stderr: "doax auth set: provide --secret (or run interactively)" };
 
     const entry = await acquireCredential(xdeps, resolved, secret);

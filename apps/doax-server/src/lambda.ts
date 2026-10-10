@@ -252,10 +252,18 @@ app.put("/:ns{@[a-z0-9._-]+}/:namever", async (c) => {
     const digest = `sha256-${createHash("sha256").update(content).digest("hex")}`;
     const manifest: Record<string, unknown> = { ...body.manifest, identity, integrity: digest };
 
-    // Immutability (spec §4.4): a version can be created once, never replaced.
+    // Immutability (spec §4.4): a version can be created once, never replaced. The admin-only
+    // force header is a PRE-PUBLIC escape hatch for re-seeding; it is removed at public launch.
+    const force = c.req.header("x-doax-admin-force") === "true";
     const inserted = await db!.query(
-        `INSERT INTO manifests (namespace, name, version, kind, manifest, digest)
-         VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING RETURNING version`,
+        force
+            ? `INSERT INTO manifests (namespace, name, version, kind, manifest, digest)
+               VALUES ($1, $2, $3, $4, $5, $6)
+               ON CONFLICT (namespace, name, version)
+               DO UPDATE SET kind = EXCLUDED.kind, manifest = EXCLUDED.manifest, digest = EXCLUDED.digest, published_at = now()
+               RETURNING version`
+            : `INSERT INTO manifests (namespace, name, version, kind, manifest, digest)
+               VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING RETURNING version`,
         [namespace, name, version, manifest.kind, JSON.stringify(manifest), digest],
     );
     if (inserted.rowCount === 0) return c.json(withManifesto(DOMAIN, { error: `${identity} already exists (immutable, §4.4)` }), 409);
