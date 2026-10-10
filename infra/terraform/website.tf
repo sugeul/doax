@@ -14,11 +14,42 @@ resource "aws_s3_bucket_public_access_block" "site" {
 }
 
 resource "aws_s3_object" "index" {
-  bucket       = aws_s3_bucket.site.id
-  key          = "index.html"
-  source       = "${path.module}/build/site/index.html"
-  etag         = filemd5("${path.module}/build/site/index.html")
-  content_type = "text/html; charset=utf-8"
+  bucket        = aws_s3_bucket.site.id
+  key           = "index.html"
+  source        = "${path.module}/build/site/index.html"
+  etag          = filemd5("${path.module}/build/site/index.html")
+  content_type  = "text/html; charset=utf-8"
+  cache_control = "public, max-age=300"
+}
+
+# The CLI install guide, served at https://doax.io/install
+resource "aws_s3_object" "install_page" {
+  bucket        = aws_s3_bucket.site.id
+  key           = "install"
+  source        = "${path.module}/build/site/install.html"
+  etag          = filemd5("${path.module}/build/site/install.html")
+  content_type  = "text/html; charset=utf-8"
+  cache_control = "public, max-age=300"
+}
+
+# The one-liner installer: curl -fsSL https://doax.io/install.sh | bash
+resource "aws_s3_object" "install_sh" {
+  bucket        = aws_s3_bucket.site.id
+  key           = "install.sh"
+  source        = "${path.module}/build/site/install.sh"
+  etag          = filemd5("${path.module}/build/site/install.sh")
+  content_type  = "text/x-shellscript; charset=utf-8"
+  cache_control = "public, max-age=300"
+}
+
+# The CLI itself: one self-contained ESM bundle (Node >= 20)
+resource "aws_s3_object" "cli_bundle" {
+  bucket        = aws_s3_bucket.site.id
+  key           = "cli/doax.mjs"
+  source        = "${path.module}/build/site/cli/doax.mjs"
+  etag          = filemd5("${path.module}/build/site/cli/doax.mjs")
+  content_type  = "text/javascript; charset=utf-8"
+  cache_control = "public, max-age=300"
 }
 
 resource "aws_cloudfront_origin_access_control" "site" {

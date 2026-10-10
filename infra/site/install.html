@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Install the doax CLI — the executor for the doax registry of agent interfaces.">
+<title>Install the doax CLI</title>
+<style>
+    :root {
+        --bg: #04070e; --surface: #0b1220; --surface-2: #0f1828;
+        --ink: #eaf1fb; --muted: #91a4c2; --faint: #5c7097; --line: #182438;
+        --accent: #37e6d0; --accent-2: #4f8dff; --accent-ink: #022421;
+        --glow: rgba(55,230,208,.5);
+        --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+        --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body {
+        margin: 0; color: var(--ink); font-family: var(--sans); line-height: 1.65;
+        background: radial-gradient(120% 90% at 70% 0%, #0a1426 0%, #05080f 48%, #03050b 100%) fixed;
+        -webkit-font-smoothing: antialiased;
+    }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    ::selection { background: var(--accent); color: var(--accent-ink); }
+    .wrap { max-width: 780px; margin-inline: auto; padding: 0 24px 90px; }
+    header { display: flex; align-items: center; gap: 12px; padding: 26px 0 0; }
+    .ring {
+        width: 22px; height: 22px; border-radius: 50%;
+        background: conic-gradient(from 210deg, var(--accent), var(--accent-2), var(--accent));
+        box-shadow: 0 0 16px var(--glow);
+        mask: radial-gradient(circle at 50% 50%, transparent 54%, #000 56%);
+        -webkit-mask: radial-gradient(circle at 50% 50%, transparent 54%, #000 56%);
+    }
+    header .brand { font-weight: 700; font-size: 17px; color: var(--ink); }
+    header .brand:hover { text-decoration: none; }
+    header nav { margin-left: auto; display: flex; gap: 18px; font-size: 13.5px; }
+    h1 { font-size: clamp(30px, 5vw, 44px); letter-spacing: -.03em; line-height: 1.05; margin: 54px 0 0; text-wrap: balance; }
+    .lede { color: var(--muted); font-size: 17px; margin-top: 14px; max-width: 58ch; }
+    h2 { font-size: 15px; letter-spacing: .16em; text-transform: uppercase; font-family: var(--mono); color: var(--accent); margin: 52px 0 14px; font-weight: 600; }
+    p { color: var(--muted); margin: 10px 0; }
+    code { font-family: var(--mono); font-size: .92em; color: var(--ink); background: var(--surface-2); border: 1px solid var(--line); border-radius: 6px; padding: 1px 6px; }
+    pre {
+        font-family: var(--mono); font-size: 13.5px; line-height: 1.7; color: var(--ink);
+        background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+        padding: 16px 18px; overflow-x: auto; margin: 14px 0;
+    }
+    pre .c { color: var(--faint); }
+    pre .p { color: var(--accent); user-select: none; }
+    .note { border-left: 2px solid var(--accent-2); padding: 2px 0 2px 14px; margin: 16px 0; color: var(--muted); font-size: 14.5px; }
+    table { border-collapse: collapse; width: 100%; font-size: 14px; margin: 14px 0; }
+    th, td { text-align: left; padding: 8px 12px 8px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+    th { color: var(--faint); font-family: var(--mono); font-size: 11px; letter-spacing: .12em; text-transform: uppercase; font-weight: 500; }
+    td code { white-space: nowrap; }
+    footer { margin-top: 70px; padding-top: 22px; border-top: 1px solid var(--line); color: var(--faint); font-size: 13.5px; display: flex; gap: 22px; flex-wrap: wrap; }
+    footer a { color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+    <header>
+        <span class="ring" aria-hidden="true"></span>
+        <a class="brand" href="/">doax</a>
+        <nav>
+            <a href="/">Home</a>
+            <a href="https://registry.doax.io" rel="noopener">registry.doax.io</a>
+        </nav>
+    </header>
+
+    <h1>Install the doax CLI</h1>
+    <p class="lede">
+        <code>doax</code> is the executor for the doax registry: it resolves resources, verifies package
+        integrity, runs the authentication tier a resource demands, invokes it, and records every access
+        in the audit log.
+    </p>
+
+    <h2>Requirements</h2>
+    <p>Linux or macOS with <a href="https://nodejs.org" rel="noopener">Node.js</a> ≥ 20 and <code>curl</code>. Nothing else — the CLI is a single self-contained file.</p>
+
+    <h2>Install</h2>
+    <pre><span class="p">$</span> curl -fsSL https://doax.io/install.sh | bash</pre>
+    <p>The script downloads <code>https://doax.io/cli/doax.mjs</code> into <code>~/.doax/lib/</code> and puts a <code>doax</code> launcher in <code>~/.local/bin</code> (override with <code>DOAX_BIN</code>). It tells you if <code>~/.local/bin</code> is missing from your <code>PATH</code>.</p>
+    <p>Prefer to read before you run? <a href="/install.sh">View install.sh</a>. Manual equivalent:</p>
+    <pre><span class="p">$</span> curl -fsSL https://doax.io/cli/doax.mjs -o ~/.doax/lib/doax.mjs
+<span class="p">$</span> node ~/.doax/lib/doax.mjs --version</pre>
+
+    <h2>Verify</h2>
+    <pre><span class="p">$</span> doax status
+<span class="c"># { "registry": "https://registry.doax.io", "reachable": true, ... }</span></pre>
+
+    <h2>First five minutes</h2>
+    <pre><span class="c"># find something to use</span>
+<span class="p">$</span> doax search slack
+
+<span class="c"># read a Slack channel — the CLI asks for your Slack token in context,</span>
+<span class="c"># with the link to obtain one, then caches it for every Slack resource</span>
+<span class="p">$</span> doax read @doax/slack-channel-history --param channel=C0123456789
+
+<span class="c"># preview an action without side effects, then run it</span>
+<span class="p">$</span> doax execute @doax/slack-post --param channel=C0123456789 --param text="hello from doax" --dry-run
+<span class="p">$</span> doax execute @doax/slack-post --param channel=C0123456789 --param text="hello from doax"
+
+<span class="c"># see or drop cached credentials</span>
+<span class="p">$</span> doax auth list
+<span class="p">$</span> doax auth purge --all</pre>
+
+    <h2>For agents (non-interactive)</h2>
+    <p>Every command runs without a TTY. Agents get structured output and machine-actionable errors instead of prompts:</p>
+    <pre><span class="p">$</span> doax read @doax/slack-channel-history --param channel=C01 --json --no-input
+<span class="c"># on missing auth: {"ok":false,"faultClass":"credential-missing",</span>
+<span class="c">#   "willRequireInteraction":true,"fix":"re-run with --secret &lt;value&gt;, ..."}</span>
+<span class="p">$</span> doax read @doax/slack-channel-history --param channel=C01 --secret xoxb-... --json</pre>
+    <table>
+        <tr><th>flag</th><th>effect</th></tr>
+        <tr><td><code>--json</code></td><td>single JSON object on stdout/stderr; errors carry <code>faultClass</code> and a <code>fix</code></td></tr>
+        <tr><td><code>--no-input</code></td><td>never prompt (also <code>DOAX_NO_INPUT=1</code>; non-TTY stdin never prompts)</td></tr>
+        <tr><td><code>--secret</code></td><td>supply the authenticator secret inline</td></tr>
+        <tr><td><code>--yes</code></td><td>grant tier-2 per-call authorization</td></tr>
+    </table>
+
+    <h2>Private registries</h2>
+    <pre><span class="p">$</span> DOAX_REGISTRY=https://registry.corp.internal doax status</pre>
+    <p>The same CLI speaks to any doax registry — public or your company's own closed install.</p>
+
+    <h2>Uninstall</h2>
+    <pre><span class="p">$</span> rm -rf ~/.doax ~/.local/bin/doax</pre>
+    <p><code>~/.doax</code> also holds your cached credentials and the package cache; removing it removes them.</p>
+
+    <footer>
+        <a href="/">doax.io</a>
+        <a href="https://registry.doax.io/manifesto.json" rel="noopener">manifesto</a>
+        <a href="https://registry.doax.io" rel="noopener">registry API</a>
+    </footer>
+</div>
+</body>
+</html>
