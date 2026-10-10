@@ -21,6 +21,14 @@ const AUTHENTICATOR = "@doax/slack-login@1.0.0";
 
 const slackFaults = (extra = []) => [
     {
+        faultClass: "missing-scope",
+        trigger: "the Slack app's token lacks an OAuth scope the operation needs; Slack reports which",
+        callerVisibleEffect: "operation fails, no side effect; the error names the needed scope",
+        expectedFrequency: "setup-time; once scopes are granted it stops",
+        recommendedCallerAction:
+            "add the named scope at https://api.slack.com/apps (OAuth & Permissions), reinstall the app, re-authenticate if the token rotated",
+    },
+    {
         faultClass: "invalid-auth",
         trigger: "token expired, revoked, or wrong",
         callerVisibleEffect: "operation fails, no side effect",
@@ -103,6 +111,7 @@ const RESOURCES = [
         manifest: {
             kind: "data-source",
             summary: "Read the message history of a Slack channel the caller can see",
+            requiredScopes: ["channels:history", "groups:history (private channels)"],
             description:
                 "One collection: Slack messages visible to the caller's token, retrieved per channel via conversations.history. Read params: channel (required), limit (default 20), oldest, cursor (continuation). The source is caller-relative (§5.3): you read exactly what your token may read.",
             owner: OWNER,
@@ -131,6 +140,7 @@ const RESOURCES = [
         manifest: {
             kind: "data-source",
             summary: "List the Slack channels the caller can see",
+            requiredScopes: ["channels:read", "groups:read (private channels)"],
             description:
                 "One collection: Slack channels visible to the caller's token, via conversations.list. Read params: types (public_channel, private_channel; default public), limit (default 100), cursor (continuation). The natural first read — its `id` field is the `channel` parameter of slack-channel-history and slack-post.",
             owner: OWNER,
@@ -159,6 +169,7 @@ const RESOURCES = [
         manifest: {
             kind: "action",
             summary: "Post a message to a Slack channel as the authenticated principal",
+            requiredScopes: ["chat:write", "chat:write.public (public channels the app is not in)"],
             description:
                 "Posts one message via chat.postMessage. Params: channel (required), text (required), thread_ts (optional, reply in thread). Dry-run is predictive: it validates the token and echoes what would be sent without sending (§6.1).",
             owner: OWNER,
@@ -172,7 +183,16 @@ const RESOURCES = [
             idempotency: "non-idempotent",
             recoveryAction: "none",
             serviceLevel: {
-                expectedFaults: slackFaults([channelFault]),
+                expectedFaults: slackFaults([
+                    channelFault,
+                    {
+                        faultClass: "not-in-channel",
+                        trigger: "the app is not a member of the target public channel and lacks chat:write.public",
+                        callerVisibleEffect: "operation fails, no side effect",
+                        expectedFrequency: "setup-time",
+                        recommendedCallerAction: "invite the app to the channel (/invite @yourapp) or grant chat:write.public",
+                    },
+                ]),
                 degradationBehavior: "fail fast; a failed attempt posts nothing",
                 dependencyLevels: { [AUTHENTICATOR]: "per-attempt failure ~1%" },
                 measurement: "not measured",

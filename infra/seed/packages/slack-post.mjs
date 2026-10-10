@@ -16,10 +16,24 @@ async function slack(method, token, params = {}) {
     if (!res.ok) throw Object.assign(new Error(`slack-unavailable: HTTP ${res.status}`), { faultClass: "slack-unavailable" });
     const body = await res.json();
     if (!body.ok) {
+        if (body.error === "missing_scope") {
+            throw Object.assign(new Error(`missing-scope: the Slack token lacks a required permission (needed: ${body.needed ?? "?"})`), {
+                faultClass: "missing-scope",
+                detail: {
+                    neededScope: body.needed ?? null,
+                    providedScopes: body.provided ?? null,
+                    fix: "add the scope at https://api.slack.com/apps → your app → OAuth & Permissions → Bot Token Scopes, reinstall the app, then retry (doax auth set @doax/slack-login --secret ... if the token rotated)",
+                },
+            });
+        }
         const faultClass = body.error === "invalid_auth" || body.error === "token_revoked" ? "invalid-auth"
             : body.error === "ratelimited" ? "rate-limited"
-            : body.error === "channel_not_found" || body.error === "not_in_channel" ? "channel-not-found" : "slack-error";
-        throw Object.assign(new Error(`${faultClass}: ${body.error}`), { faultClass, slackError: body.error });
+            : body.error === "channel_not_found" ? "channel-not-found"
+            : body.error === "not_in_channel" ? "not-in-channel" : "slack-error";
+        const detail = body.error === "not_in_channel"
+            ? { fix: "invite the app to the channel (/invite @yourapp), or grant the chat:write.public scope" }
+            : undefined;
+        throw Object.assign(new Error(`${faultClass}: ${body.error}`), { faultClass, slackError: body.error, detail });
     }
     return body;
 }

@@ -149,12 +149,13 @@ export async function run(argv: string[], deps: CliDeps = defaultDeps()): Promis
         }
     } catch (err) {
         const detail = (err as ExecutorError).detail ?? {};
-        return {
-            exitCode: 1,
-            stderr: json
-                ? JSON.stringify({ ok: false, command, error: (err as Error).message, faultClass: fault(err), ...detail })
-                : `doax ${command}: ${(err as Error).message} [${fault(err)}]`,
-        };
+        if (json) {
+            return { exitCode: 1, stderr: JSON.stringify({ ok: false, command, error: (err as Error).message, faultClass: fault(err), ...detail }) };
+        }
+        let text = `doax ${command}: ${(err as Error).message} [${fault(err)}]`;
+        if (typeof detail.neededScope === "string") text += `\n  needed scope: ${detail.neededScope}`;
+        if (typeof detail.fix === "string") text += `\n  fix: ${detail.fix}`;
+        return { exitCode: 1, stderr: text };
     }
 }
 
