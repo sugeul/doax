@@ -33,11 +33,19 @@ resource "aws_cloudfront_origin_access_control" "apps" {
   signing_protocol                  = "sigv4"
 }
 
+resource "random_password" "session_secret" {
+  length  = 48
+  special = false
+}
+
 resource "aws_cloudfront_function" "apps_router" {
   name    = "${local.name}-apps-router"
   runtime = "cloudfront-js-2.0"
   publish = true
-  code    = file("${path.module}/edge/apps-router.js")
+  code = templatefile("${path.module}/edge/apps-router.js.tpl", {
+    session_secret = random_password.session_secret.result
+    login_url      = "https://registry.${var.zone}/auth/login"
+  })
 }
 
 resource "aws_acm_certificate" "apps" {

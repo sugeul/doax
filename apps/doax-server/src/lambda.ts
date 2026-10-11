@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomUUID } from "node:crypto";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { handle } from "hono/aws-lambda";
@@ -32,6 +32,7 @@ const AUDIT_LOG_GROUP = process.env.DOAX_AUDIT_LOG_GROUP ?? "";
 const EMAIL_FROM = process.env.DOAX_EMAIL_FROM ?? "";
 const APPS_BUCKET = process.env.DOAX_APPS_BUCKET ?? "";
 const APP_HOST = process.env.DOAX_APP_HOST ?? "app.doax.io";
+const SESSION_SECRET = process.env.DOAX_SESSION_SECRET ?? "";
 
 const s3 = new S3Client({});
 const cw = new CloudWatchLogsClient({});
@@ -289,6 +290,103 @@ app.get("/healthz/deep", async (c) => {
 });
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/* ---------- browser sessions for doax-apps (*.app.doax.io sits behind this) ---------- */
+
+const b64url = (buf: Buffer) => buf.toString("base64").replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+
+/**
+  * Cookie format: `<expMillis>.<payloadB64url>.<hmacHex>` — expiry sits outside the payload
+  * because the edge function (CloudFront Functions) has crypto/HMAC but no base64 decoder.
+  */
+function signSession(principal: string, namespaces: string[]): string {
+    const exp = Date.now() + 7 * 86400_000;
+    const payload = b64url(Buffer.from(JSON.stringify({ p: principal, ns: namespaces })));
+    const sig = createHmac("sha256", SESSION_SECRET).update(`${exp}.${payload}`).digest("hex");
+    return `${exp}.${payload}.${sig}`;
+}
+
+async function sessionCookieFor(principal: string): Promise<string> {
+    const namespaces = await namespacesOf(principal, ["owner", "publisher", "reader"]);
+    const value = signSession(principal, namespaces);
+    return `doax_session=${value}; Domain=.doax.io; Path=/; Max-Age=${7 * 86400}; Secure; HttpOnly; SameSite=Lax`;
+}
+
+/** Only app subdomains may be login return targets (open-redirect guard). */
+const RETURN_URL = new RegExp(`^https://([a-z0-9-]+\.)?${APP_HOST.replaceAll(".", "\\.")}(/.*)?$`);
+
+const LOGIN_PAGE = (ret: string) => `<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>Sign in · doax</title><style>
+body{margin:0;display:grid;place-items:center;min-height:100vh;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+background:radial-gradient(120% 90% at 70% 0%,#0a1426 0%,#05080f 48%,#03050b 100%) fixed;color:#eaf1fb}
+.card{width:min(380px,92vw);background:#0b1220;border:1px solid #182438;border-radius:16px;padding:28px}
+h1{font-size:18px;margin:0 0 4px;display:flex;gap:10px;align-items:center}
+.ring{width:18px;height:18px;border-radius:50%;background:conic-gradient(from 210deg,#37e6d0,#4f8dff,#37e6d0);
+mask:radial-gradient(circle at 50% 50%,transparent 52%,#000 54%);-webkit-mask:radial-gradient(circle at 50% 50%,transparent 52%,#000 54%)}
+p{color:#91a4c2;font-size:13.5px;margin:6px 0 18px}
+input{width:100%;font:inherit;font-size:15px;color:#eaf1fb;background:#0f1828;border:1px solid #182438;border-radius:10px;padding:11px 13px;margin-bottom:10px}
+input:focus{outline:none;border-color:#37e6d0}
+button{width:100%;font:inherit;font-size:14px;font-weight:700;color:#022421;background:#37e6d0;border:0;border-radius:10px;padding:12px;cursor:pointer}
+.msg{font-size:12.5px;color:#5c7097;min-height:18px;margin-top:10px}.msg.err{color:#ff8a8a}
+#step2{display:none}</style></head><body><div class="card">
+<h1><span class="ring"></span>Sign in to doax</h1>
+<p>This app is protected by doax. Enter your email; a 6-digit code will be sent.</p>
+<div id="step1"><input id="email" type="email" placeholder="you@example.com" autocomplete="email">
+<button onclick="sendCode()">Send code</button></div>
+<div id="step2"><input id="code" inputmode="numeric" placeholder="6-digit code" autocomplete="one-time-code">
+<button onclick="verify()">Sign in</button></div>
+<div class="msg" id="msg"></div></div>
+<script>
+const ret=${JSON.stringify(ret)};const m=document.getElementById("msg");
+async function sendCode(){const email=document.getElementById("email").value.trim();m.className="msg";m.textContent="sending...";
+const r=await fetch("/auth/email",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({email})});
+const b=await r.json();if(!r.ok){m.className="msg err";m.textContent=b.error||"failed";return}
+document.getElementById("step1").style.display="none";document.getElementById("step2").style.display="block";
+m.textContent="code sent to "+email;window._email=email;}
+async function verify(){const code=document.getElementById("code").value.trim();m.className="msg";m.textContent="verifying...";
+const r=await fetch("/auth/session",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({email:window._email,code})});
+const b=await r.json();if(!r.ok){m.className="msg err";m.textContent=b.error||"failed";return}
+location.href=ret;}
+</script></body></html>`;
+
+app.get("/auth/login", (c) => {
+    const ret = c.req.query("return") ?? "";
+    if (!RETURN_URL.test(ret)) return c.json(withManifesto(DOMAIN, { error: "invalid return url" }), 400);
+    return c.html(LOGIN_PAGE(ret));
+});
+
+/** Verify the emailed code and set the browser session cookie (same code table as /auth/verify). */
+app.post("/auth/session", async (c) => {
+    const body = (await c.req.json().catch(() => null)) as { email?: string; code?: string } | null;
+    const email = body?.email?.trim().toLowerCase() ?? "";
+    const code = body?.code?.trim() ?? "";
+    if (!EMAIL.test(email) || !/^\d{6}$/.test(code)) return c.json(withManifesto(DOMAIN, { error: "body needs { email, code }" }), 400);
+    await ensureSchema();
+    const { rows } = await db!.query<{ code_hash: string; attempts: number; expired: boolean }>(
+        `UPDATE email_logins SET attempts = attempts + 1 WHERE email = $1
+         RETURNING code_hash, attempts, (expires_at < now()) AS expired`,
+        [email],
+    );
+    const row = rows[0];
+    if (!(row && !row.expired && row.attempts <= 5 && row.code_hash === hashToken(code))) {
+        await appendAudit([{ class: "auth", actor: email, resource: "registry:app-session", mode: "verify", outcome: "failure" }]);
+        return c.json(withManifesto(DOMAIN, { error: "code invalid, expired, or too many attempts" }), 401);
+    }
+    await db!.query(`DELETE FROM email_logins WHERE email = $1`, [email]);
+    await db!.query(`INSERT INTO principals (principal_id, display_name) VALUES ($1, $1) ON CONFLICT DO NOTHING`, [email]);
+    c.header("set-cookie", await sessionCookieFor(email));
+    await appendAudit([{ class: "auth", actor: email, resource: "registry:app-session", mode: "verify", outcome: "success" }]);
+    return c.json(withManifesto(DOMAIN, { ok: true, principal: email }));
+});
+
+/** Mint a session from an existing token (CLI users and tests): GET with Bearer. */
+app.get("/auth/session", async (c) => {
+    const principal = await principalFrom(c);
+    if (!principal) return c.json(withManifesto(DOMAIN, { error: "requires a Bearer token" }), 401);
+    c.header("set-cookie", await sessionCookieFor(principal));
+    await appendAudit([{ class: "auth", actor: principal, resource: "registry:app-session", mode: "issue" }]);
+    return c.json(withManifesto(DOMAIN, { ok: true, principal }));
+});
 
 /** Email sign-in, step 1 (pre-OIDC spec delta): send a 6-digit code. Proof of inbox = identity. */
 app.post("/auth/email", async (c) => {

@@ -23,7 +23,8 @@ resource "aws_cloudfront_origin_access_control" "s3" {
 # never forward Host (API GW routes on its own hostname).
 resource "aws_cloudfront_origin_request_policy" "lambda_oac" {
   name = "${local.name}-lambda-oac"
-  cookies_config { cookie_behavior = "none" }
+  # cookies must be forwarded or CloudFront strips Set-Cookie from responses (session issuance)
+  cookies_config { cookie_behavior = "all" }
   query_strings_config { query_string_behavior = "all" }
   headers_config {
     header_behavior = "allExcept"

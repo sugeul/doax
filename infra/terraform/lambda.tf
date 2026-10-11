@@ -79,6 +79,7 @@ resource "aws_lambda_function" "registry" {
       DOAX_EMAIL_FROM      = "login@${var.zone}"
       DOAX_APPS_BUCKET     = aws_s3_bucket.apps.bucket
       DOAX_APP_HOST        = "app.${var.zone}"
+      DOAX_SESSION_SECRET  = random_password.session_secret.result
     }
   }
 
