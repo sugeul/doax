@@ -203,6 +203,7 @@
       <button class="tab" role="tab" id="tab-search" aria-selected="false" aria-controls="view-search">Search<span>&nbsp;the registry</span></button>
     </nav>
     <div class="nav-right">
+      <a class="ghost" href="#demo">Demo</a>
       <a class="ghost" href="/install">Install CLI</a>
       <a class="ghost" href="https://registry.doax.io" target="_blank" rel="noopener">registry.doax.io ↗</a>
       <button class="cta" id="getStarted">Get started</button>
@@ -303,6 +304,39 @@
     </div>
   </section>
 
+  <!-- demo guide -->
+  <section class="band" id="demo">
+    <div class="wrap">
+      <div class="sec-head">
+        <span class="eyebrow">Demo · a real dispatch</span>
+        <h2>A small factory, made legible in one day.</h2>
+        <p>한빛정밀 is a fictional 12-person molding shop. Its shift-end spreadsheet became five registry resources under <span class="mono">@demo</span>, and its dashboard is a <strong>doax-app</strong>: a static page that resolves the resources from the registry, verifies each package's sha-256 digest in the browser, and reads everything through the Fixed Interface. The dashboard leads with the gap — target, state, fault points — not just status.</p>
+      </div>
+      <div class="grid g3" style="margin-top:40px;">
+        <div class="card">
+          <span class="kind-tag">dashboard</span>
+          <h3>demo.app.doax.io</h3>
+          <p>The live dashboard. It sits behind doax sign-in — enter any email, get a 6-digit code. The sign-in gate is part of the demo: apps are governed surfaces, not public pages.</p>
+        </div>
+        <div class="card">
+          <span class="kind-tag">resources</span>
+          <h3>@demo/*</h3>
+          <p>Three data-sources over the posted shift-end export, a Slack report action, and a tier-2 reorder action an agent can prepare but only a human may execute.</p>
+        </div>
+        <div class="card">
+          <span class="kind-tag">playbook</span>
+          <h3>One dispatch, repeatable</h3>
+          <p>Owner signs in and claims the namespace, the FDE publishes the kit and deploys the app. The customer hosts nothing; every access lands in their audit log.</p>
+        </div>
+      </div>
+      <div class="hero-cta" style="margin-top:28px;">
+        <a class="cta" href="https://demo.app.doax.io" target="_blank" rel="noopener" style="text-decoration:none;">Open the demo →</a>
+        <button class="ghost" id="demoSearch">Browse @demo resources</button>
+        <a class="ghost" href="https://github.com/sugeul/doax-demo" target="_blank" rel="noopener">doax-demo on GitHub ↗</a>
+      </div>
+    </div>
+  </section>
+
   <section class="band cta-band">
     <div class="wrap">
       <span class="eyebrow" style="justify-content:center;">Start on day one</span>
@@ -358,6 +392,7 @@
     </div>
     <div class="foot-links">
       <a href="#" id="footHome">Home</a>
+      <a href="#demo" id="footDemo">Demo</a>
       <a href="/install">Install the CLI</a>
       <a href="https://registry.doax.io" target="_blank" rel="noopener">Registry API ↗</a>
       <a href="https://registry.doax.io/manifesto.json" target="_blank" rel="noopener">Manifesto ↗</a>
@@ -484,6 +519,13 @@ void main(){
   document.getElementById("brandHome").addEventListener("click", function(e){ e.preventDefault(); show("home"); });
   document.getElementById("footHome").addEventListener("click", function(e){ e.preventDefault(); show("home"); });
   ["heroSearch","getStarted","cta2"].forEach(function(id){ var e=document.getElementById(id); if(e) e.addEventListener("click", function(){ show("search"); }); });
+
+  var demoBtn = document.getElementById("demoSearch");
+  if (demoBtn) demoBtn.addEventListener("click", function(){
+    show("search");
+    var q = document.getElementById("q");
+    q.value = "@demo"; state.q = "@demo"; render(); tryLive("@demo");
+  });
 
   /* ---------------- install one-liner copy ---------------- */
   var copyBtn = document.getElementById("copyInstall");
