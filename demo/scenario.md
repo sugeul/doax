@@ -8,10 +8,21 @@ the **dispatch playbook**: every section is meant to be repeated, customer after
 
 1. **Telemetry is not an API.** In a real small factory, "telemetry" is an isolated PC next to
    the machine (no network, exports CSV when a human asks) or a spreadsheet a person fills in
-   at the end of a shift. There is nothing to "integrate" in the SaaS sense. The raw material
-   of the demo is a human-managed spreadsheet, and the design treats that with respect:
-   every number carries *when it was last refreshed and by whom*, and staleness is displayed,
-   never hidden (spec §5.5).
+   at the end of a shift. There is nothing to "integrate" in the SaaS sense. The factory gets
+   data to us one of two ways:
+
+   - **Post it** — a person drops the shift-end export (CSV/XLSX) onto a share or uploads it.
+     This is the demo path: zero new habits beyond "save the file here".
+   - **Sensed shared directory** — the productized path: the factory connects a shared folder
+     (OneDrive / Google Drive / a network share synced to one) and a scheduled dispatch on our
+     side *senses* it — polls on the declared cadence, picks up the newest export, normalizes
+     it, and refreshes the resource data. This is exactly the spec's unattended
+     `trusted-executor` + batch shape (§6.5, Step Functions on the hosted side), and it gives
+     real lateness accounting: cadence "every shift end by 19:00", late = no new file by then.
+
+   Either way the design treats human-cadenced data with respect: every number carries *when
+   it was last refreshed and from which file/sync*, and staleness is displayed, never hidden
+   (spec §5.5).
 
 2. **The customer has no team to operate a registry.** No IT department, no one to run a
    server, patch it, or manage accounts. So the factory self-hosts **nothing**. Their
@@ -36,9 +47,9 @@ The owner gets numbers once a day by phone. Nobody at Hanbit will ever run a ser
 
 | Resource | Kind | Tier | Backing reality |
 |---|---|---|---|
-| `@hanbit/machine-status` | data-source | 3 | The "machines" sheet tab — per line: state, cycle count, last CSV import time. Freshness = when 김반장 last synced the isolated PC's export. |
-| `@hanbit/production-log` | data-source | 3 | The "production" tab — daily output and defect counts per line. Refresh cadence declared: "each shift end, by 19:00"; lateness is visible, not masked. |
-| `@hanbit/defect-summary` | data-source | 3 | The "defects" tab — yesterday's defects by cause. The owner's #1 question. |
+| `@hanbit/machine-status` | data-source | 3 | Per line: state, cycle count, last import time — parsed from the newest posted/sensed export. Freshness = that file's timestamp. |
+| `@hanbit/production-log` | data-source | 3 | Daily output and defect counts per line, from the same exports. Cadence declared: "each shift end, by 19:00"; lateness is visible, not masked. |
+| `@hanbit/defect-summary` | data-source | 3 | Yesterday's defects by cause. The owner's #1 question. |
 | `@hanbit/daily-report` | action | 3 | Composes the day's numbers and posts them to the factory's messenger channel (depends on `@doax/slack-post`). |
 | `@hanbit/order-resin` | action | **2** | Reorder raw material (demo: mock supplier). Predictive dry-run shows the cost estimate; tier 2 forces a per-call human authorization. |
 
@@ -80,11 +91,14 @@ at which tier, append-only. Queryable by the owner for `@hanbit/*` and nobody el
 ## The dispatch playbook (what repeats per customer)
 
 1. Owner email sign-in → claim `@<customer>` → add FDE as publisher.
-2. Copy the spreadsheet template; fit columns to how their people already write.
-3. Instantiate the resource kit (this directory) with the customer's sheet + channel ids;
-   `doax publish` under `@<customer>`.
+2. Copy the spreadsheet template; fit columns to how their people already write. Point the
+   shift-end export at the shared directory (or teach the post-the-file ritual).
+3. Instantiate the resource kit with the customer's share link + channel ids;
+   `doax publish` under `@<customer>`. Productized path: register the sensing dispatch
+   (scheduled batch) for their directory.
 4. Deploy the dashboard template to `<customer>.doax.io`.
-5. Teach one ritual: the shift-end sync (isolated PC → sheet). Everything downstream is ours.
+5. Teach one ritual: the shift-end export lands in the shared directory. Everything
+   downstream — sensing, normalizing, serving, auditing — is ours.
 6. Hand the owner two commands: `doax audit` and `doax execute @<customer>/daily-report`.
 
 The FDE never installs anything at the factory. Subsequent dispatches add resources
@@ -101,13 +115,22 @@ The FDE never installs anything at the factory. Subsequent dispatches add resour
 | Day One — the whole thing is one dispatch | all |
 | Expansion — "when data may not leave the building, the same registry installs inside it" | closing line |
 
+## Where the code lives
+
+**This repo stays essential infrastructure only** (registry, CLI, spec, site). The demo
+deliverables — the dashboard, the customer resource kit, seed data, the sensing dispatch —
+live in a **separate repo** (`doax-demo`), the same way a real customer engagement would:
+customer-facing artifacts never enter the registry's codebase. This file is the scenario and
+playbook; the other repo implements it.
+
 ## Build list
 
-| Piece | Status |
-|---|---|
-| Sign-in, namespaces + roles, publish, tiers, audit, Slack suite, CLI | exists, live |
-| Five `@hanbit` resource packages + manifests (this directory) | to build (~half day) |
-| Spreadsheet template with realistic seed data | to build (30 min) |
-| Dashboard page (browser-side resolve + digest verify + read) | to build (~1 day; the only novel machinery) |
-| `hanbit.doax.io` hosting | trivial (existing S3+CloudFront pattern) |
-| Mock supplier endpoint for `order-resin` | tiny |
+| Piece | Where | Status |
+|---|---|---|
+| Sign-in, namespaces + roles, publish, tiers, audit, Slack suite, CLI | this repo | exists, live |
+| Five `@hanbit` resource packages + manifests | doax-demo | to build (~half day) |
+| Spreadsheet/export template with realistic seed data | doax-demo | to build (30 min) |
+| Shared-directory sensing dispatch (scheduled batch) | doax-demo | to build (demo: read-at-read from the share link; sensing batch = productized step) |
+| Dashboard page (browser-side resolve + digest verify + read) | doax-demo | to build (~1 day; the only novel machinery) |
+| `hanbit.doax.io` hosting | doax-demo | trivial (same S3+CloudFront pattern) |
+| Mock supplier endpoint for `order-resin` | doax-demo | tiny |
