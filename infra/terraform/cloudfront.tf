@@ -1,5 +1,17 @@
 # The web-app front door (spec decision #4: one hostname, one certificate). Routes the Fixed
 # Interface to the registry-API Lambda, and immutable package downloads straight to S3.
+resource "aws_cloudfront_response_headers_policy" "packages_cors" {
+  name = "${local.name}-packages-cors"
+  cors_config {
+    access_control_allow_credentials = false
+    access_control_allow_origins { items = ["*"] }
+    access_control_allow_headers { items = ["*"] }
+    access_control_allow_methods { items = ["GET", "HEAD"] }
+    access_control_max_age_sec = 86400
+    origin_override            = true
+  }
+}
+
 resource "aws_cloudfront_origin_access_control" "s3" {
   name                              = "${local.name}-s3-oac"
   origin_access_control_origin_type = "s3"
@@ -63,8 +75,10 @@ resource "aws_cloudfront_distribution" "main" {
     allowed_methods        = ["GET", "HEAD"]
     cached_methods         = ["GET", "HEAD"]
     cache_policy_id        = local.cache_optimized_policy_id
-    # Browser doax-apps fetch packages cross-origin; SimpleCORS stamps ACAO:* at the edge.
-    response_headers_policy_id = data.aws_cloudfront_response_headers_policy.simple_cors.id
+    # Browser doax-apps fetch packages cross-origin. A STATIC custom header, not the managed
+    # CORS policy: CloudFront's conditional CORS logic silently skips ACAO when the request
+    # carries the HTTP Priority header (which Chromium always sends on fetch).
+    response_headers_policy_id = aws_cloudfront_response_headers_policy.packages_cors.id
   }
 
   restrictions {
