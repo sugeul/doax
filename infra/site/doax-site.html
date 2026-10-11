@@ -514,11 +514,14 @@ void main(){
     var SPAN = 0.85; // panels end here; the rest of the pin shows the finished infinity alone
     for (var i=0;i<N;i++){
       var center = (i/(N-1)) * SPAN;
-      var dist = Math.abs(scrollP - center);
-      var o = Math.max(0, 1 - dist/0.16);
+      var rel = scrollP - center;
+      // The last panel holds with the finished infinity through the tail,
+      // dissolving only at the very end of the scene.
+      if (i === N-1 && rel > 0) rel = Math.max(0, (scrollP - 0.96) / 0.04) * 0.16;
+      var o = Math.max(0, 1 - Math.abs(rel)/0.16);
       o = o*o*(3-2*o);
       panels[i].style.opacity = o.toFixed(3);
-      panels[i].style.transform = "translateY(" + (-50 + (scrollP-center)*-34) + "%)";
+      panels[i].style.transform = "translateY(" + (-50 + rel*-34) + "%)";
       panels[i].style.pointerEvents = o > 0.6 ? "auto" : "none";
     }
   }
