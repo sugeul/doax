@@ -8,7 +8,7 @@ import {
     FilterLogEventsCommand,
     PutLogEventsCommand,
 } from "@aws-sdk/client-cloudwatch-logs";
-import { HeadBucketCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { DeleteObjectCommand, HeadBucketCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { SendEmailCommand, SESv2Client } from "@aws-sdk/client-sesv2";
 import pg from "pg";
 import { MOUNTS } from "@doax/config";
@@ -247,7 +247,7 @@ app.use(
                 ? origin
                 : "https://doax.io",
         allowHeaders: ["content-type", "authorization", "x-doax-admin-token"],
-        allowMethods: ["GET", "HEAD", "POST", "PUT", "OPTIONS"],
+        allowMethods: ["GET", "HEAD", "POST", "PUT", "DELETE", "OPTIONS"],
     }),
 );
 
@@ -609,6 +609,28 @@ app.put("/:ns{@[a-z0-9._-]+}/:namever", async (c) => {
     );
     await appendAudit([{ class: "publish", actor, resource: identity, digest }]);
     return c.json(withManifesto(DOMAIN, { published: identity, digest, package: `/${packageKey(identity)}` }), 201);
+});
+
+/**
+  * PRE-PUBLIC operator escape hatch, like the force header: remove a published version
+  * outright. Removed at public launch — from then on §4.4 allows deprecate/yank only.
+  */
+app.delete("/:ns{@[a-z0-9._-]+}/:namever", async (c) => {
+    if (!isAdmin(c)) return c.json(withManifesto(DOMAIN, { error: "unpublish is operator-only (pre-public)" }), 401);
+    const identity = `${c.req.param("ns")}/${c.req.param("namever")}`;
+    const match = IDENTITY.exec(identity);
+    if (!match || !match[3]) return c.json(withManifesto(DOMAIN, { error: `unpublish needs @ns/name@version, got ${identity}` }), 400);
+    const [, namespace, name, version] = match;
+    await ensureSchema();
+    const gone = await db!.query(`DELETE FROM manifests WHERE namespace=$1 AND name=$2 AND version=$3 RETURNING version`, [
+        namespace,
+        name,
+        version,
+    ]);
+    if (gone.rowCount === 0) return c.json(withManifesto(DOMAIN, { error: `not found: ${identity}` }), 404);
+    await s3.send(new DeleteObjectCommand({ Bucket: PACKAGES_BUCKET, Key: packageKey(identity) }));
+    await appendAudit([{ class: "yank", actor: "operator", resource: identity, note: "pre-public unpublish" }]);
+    return c.json(withManifesto(DOMAIN, { unpublished: identity }));
 });
 
 /** Resolve (spec §10): @ns/name@version exact, or @ns/name -> newest active version. */

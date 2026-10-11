@@ -28,7 +28,7 @@ the **dispatch playbook**: every section is meant to be repeated, customer after
    server, patch it, or manage accounts. So the factory self-hosts **nothing**. Their
    resources live in **their namespace on the hosted registry**, created and maintained **by
    us, on every dispatch**. Governance is theirs (the owner signs in with their own email and
-   owns `@hanbit`); operations are ours (the FDE is a `publisher` in their namespace).
+   owns `@demo`); operations are ours (the FDE is a `publisher` in their namespace).
    This is the npm model applied to operations: the customer owns the name, we run the
    infrastructure.
 
@@ -43,15 +43,15 @@ the **dispatch playbook**: every section is meant to be repeated, customer after
 spreadsheet the foreman (김반장) updates at shift end from the isolated line PC's CSV export.
 The owner gets numbers once a day by phone. Nobody at Hanbit will ever run a server.
 
-## The resources the FDE creates (namespace `@hanbit`)
+## The resources the FDE creates (namespace `@demo`)
 
 | Resource | Kind | Tier | Backing reality |
 |---|---|---|---|
-| `@hanbit/machine-status` | data-source | 3 | Per line: state, cycle count, last import time — parsed from the newest posted/sensed export. Freshness = that file's timestamp. |
-| `@hanbit/production-log` | data-source | 3 | Daily output and defect counts per line, from the same exports. Cadence declared: "each shift end, by 19:00"; lateness is visible, not masked. |
-| `@hanbit/defect-summary` | data-source | 3 | Yesterday's defects by cause. The owner's #1 question. |
-| `@hanbit/daily-report` | action | 3 | Composes the day's numbers and posts them to the factory's messenger channel (depends on `@doax/slack-post`). |
-| `@hanbit/order-resin` | action | **2** | Reorder raw material (demo: mock supplier). Predictive dry-run shows the cost estimate; tier 2 forces a per-call human authorization. |
+| `@demo/machine-status` | data-source | 3 | Per line: state, cycle count, last import time — parsed from the newest posted/sensed export. Freshness = that file's timestamp. |
+| `@demo/production-log` | data-source | 3 | Daily output and defect counts per line, from the same exports. Cadence declared: "each shift end, by 19:00"; lateness is visible, not masked. |
+| `@demo/defect-summary` | data-source | 3 | Yesterday's defects by cause. The owner's #1 question. |
+| `@demo/daily-report` | action | 3 | Composes the day's numbers and posts them to the factory's messenger channel (depends on `@doax/slack-post`). |
+| `@demo/order-resin` | action | **2** | Reorder raw material (demo: mock supplier). Predictive dry-run shows the cost estimate; tier 2 forces a per-call human authorization. |
 
 All five are published, versioned, visible, tiered, and audited like any other resource —
 the factory's working reality becomes legible to agents without the factory operating anything.
@@ -59,8 +59,8 @@ the factory's working reality becomes legible to agents without the factory oper
 ## The script (one day, five acts)
 
 **Act 1 — Identity and governance (10 min).**
-Owner: `doax login --email owner@hanbit.co.kr` → 6-digit code from their real inbox. No
-account form, no IT ticket. Owner claims `@hanbit` (self-serve), adds the FDE as
+Owner: `doax login --email owner@demo.co.kr` → 6-digit code from their real inbox. No
+account form, no IT ticket. Owner claims `@demo` (self-serve), adds the FDE as
 **publisher**. From minute one: *the factory owns its namespace; the FDE is a guest with a
 role.*
 
@@ -71,21 +71,21 @@ immediately.
 
 **Act 3 — The dashboard.**
 One static page (hosted like doax.io itself — the customer hosts nothing). It resolves
-`@hanbit/*` from the registry, verifies package digests, calls the Fixed Interface `read`,
+`@demo/*` from the registry, verifies package digests, calls the Fixed Interface `read`,
 and renders: line tiles, defect chart, and — prominently — **"last refreshed 14:00 · by
 김반장's shift-end sync"** on every number. Staleness is a first-class display element
 because the backing truth is human-cadenced.
 
 **Act 4 — The agent moment.**
 An agent (Claude pointed at the CLI) answers the owner: *"어제 2호기 불량률이 왜 높았어?"* →
-`doax read @hanbit/defect-summary --json` → an answer with real numbers and their freshness.
-Then the owner asks it to reorder resin → the agent runs `@hanbit/order-resin` → **tier-2
+`doax read @demo/defect-summary --json` → an answer with real numbers and their freshness.
+Then the owner asks it to reorder resin → the agent runs `@demo/order-resin` → **tier-2
 gate**: `authorization-required`. The agent shows the dry-run cost estimate; the human
 re-runs with `--yes`. *The agent may ask; only the human pulls the trigger.*
 
 **Act 5 — Visibility (the close).**
 Owner: `doax audit` — every resolve, read, dry-run, and the one authorized execute, by whom,
-at which tier, append-only. Queryable by the owner for `@hanbit/*` and nobody else.
+at which tier, append-only. Queryable by the owner for `@demo/*` and nobody else.
 *"This is what your agents did today. Nothing is invisible, nothing can be edited away."*
 
 ## The dispatch playbook (what repeats per customer)
@@ -128,9 +128,9 @@ playbook; the other repo implements it.
 | Piece | Where | Status |
 |---|---|---|
 | Sign-in, namespaces + roles, publish, tiers, audit, Slack suite, CLI | this repo | exists, live |
-| Five `@hanbit` resource packages + manifests | doax-demo | to build (~half day) |
+| Five `@demo` resource packages + manifests | doax-demo | to build (~half day) |
 | Spreadsheet/export template with realistic seed data | doax-demo | to build (30 min) |
 | Shared-directory sensing dispatch (scheduled batch) | doax-demo | to build (demo: read-at-read from the share link; sensing batch = productized step) |
 | Dashboard page (browser-side resolve + digest verify + read) | doax-demo | to build (~1 day; the only novel machinery) |
-| `hanbit.doax.io` hosting | doax-demo | trivial (same S3+CloudFront pattern) |
+| `demo.doax.io` hosting | doax-demo | trivial (same S3+CloudFront pattern) |
 | Mock supplier endpoint for `order-resin` | doax-demo | tiny |
