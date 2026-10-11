@@ -47,6 +47,7 @@ Usage:
                                               Read a data-source (or its metadata)
     doax execute <@ns/name[@version]> [--param k=v ...] [--dry-run] [--yes] [--secret <value>]
                                               Dry-run or execute an action
+    doax app deploy <@ns> <dir>               Deploy a static doax-app to the registry's app host
     doax publish <manifest.json> <package-file>  Publish a resource (identity comes from the manifest;
                                               @global accepts anyone logged in, other namespaces need a role)
     doax login [--email <you@x>] [--code <6 digits>] [--token <pat>] [--registry <url>]
@@ -168,6 +169,8 @@ export async function run(argv: string[], deps: CliDeps = defaultDeps()): Promis
                 return await auditCmd(deps, values, json);
             case "publish":
                 return await publishCmd(deps, rest, json);
+            case "app":
+                return await appCmd(deps, rest, json);
             case "login":
                 return await loginCmd(deps, values, json);
             case "logout": {
@@ -215,6 +218,50 @@ async function status(deps: CliDeps): Promise<CliResult> {
     } catch (err) {
         return { exitCode: 1, stderr: `doax status: ${map.default} is unreachable (${(err as Error).message})` };
     }
+}
+
+/** Deploy a static doax-app bundle: same role gate as publish, served at the app host. */
+async function appCmd(deps: CliDeps, rest: string[], json: boolean): Promise<CliResult> {
+    const [sub, nsInput, dir] = rest;
+    if (sub !== "deploy" || !nsInput || !dir) return { exitCode: 2, stderr: "doax app: expected `deploy <@ns> <dir>`" };
+    if (!/^@[a-z0-9][a-z0-9._-]*$/.test(nsInput)) return { exitCode: 2, stderr: `doax app deploy: invalid namespace ${nsInput}` };
+    const { readdir, readFile, stat } = await import("node:fs/promises");
+    const { join: joinPath, relative, sep } = await import("node:path");
+    async function walk(base: string, current: string): Promise<string[]> {
+        const out: string[] = [];
+        for (const entry of await readdir(current, { withFileTypes: true })) {
+            if (entry.name.startsWith(".")) continue;
+            const full = joinPath(current, entry.name);
+            if (entry.isDirectory()) out.push(...(await walk(base, full)));
+            else out.push(full);
+        }
+        return out;
+    }
+    if (!(await stat(dir).catch(() => null))?.isDirectory()) return { exitCode: 2, stderr: `doax app deploy: ${dir} is not a directory` };
+    const paths = await walk(dir, dir);
+    if (paths.length === 0) return { exitCode: 2, stderr: `doax app deploy: ${dir} is empty` };
+    const files = await Promise.all(
+        paths.map(async (full) => ({
+            path: relative(dir, full).split(sep).join("/"),
+            content: (await readFile(full)).toString("base64"),
+        })),
+    );
+    const xdeps = executorDeps(deps);
+    const { registryFor: rf, authHeaders: ah } = await import("./executor.ts");
+    const origin = rf(xdeps, nsInput.slice(1));
+    const auth = ah(xdeps, origin);
+    if (!auth.authorization) return { exitCode: 1, stderr: `doax app deploy: not logged in to ${origin}; run doax login` };
+    const res = await deps.fetch(`${origin}/apps/${nsInput}`, {
+        method: "PUT",
+        headers: { "content-type": "application/json", ...auth },
+        body: JSON.stringify({ files }),
+    });
+    const body = (await res.json()) as { url?: string; files?: number; error?: string };
+    if (!res.ok) return { exitCode: 1, stderr: json ? JSON.stringify({ ok: false, ...body }) : `doax app deploy: ${body.error ?? res.status}` };
+    return {
+        exitCode: 0,
+        stdout: json ? JSON.stringify({ ok: true, ...body }) : `deployed ${nsInput} (${body.files} files)\n  ${body.url}`,
+    };
 }
 
 /** Publish (spec §10): PUT the manifest + package to the registry that owns the namespace. */

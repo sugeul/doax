@@ -96,7 +96,7 @@ at which tier, append-only. Queryable by the owner for `@demo/*` and nobody else
 3. Instantiate the resource kit with the customer's share link + channel ids;
    `doax publish` under `@<customer>`. Productized path: register the sensing dispatch
    (scheduled batch) for their directory.
-4. Deploy the dashboard template to `<customer>.doax.io`.
+4. Deploy the dashboard template with `doax app deploy @<customer>` to `<customer>.app.doax.io` (doax app deploy).
 5. Teach one ritual: the shift-end export lands in the shared directory. Everything
    downstream — sensing, normalizing, serving, auditing — is ours.
 6. Hand the owner two commands: `doax audit` and `doax execute @<customer>/daily-report`.
@@ -132,5 +132,5 @@ playbook; the other repo implements it.
 | Spreadsheet/export template with realistic seed data | doax-demo | to build (30 min) |
 | Shared-directory sensing dispatch (scheduled batch) | doax-demo | to build (demo: read-at-read from the share link; sensing batch = productized step) |
 | Dashboard page (browser-side resolve + digest verify + read) | doax-demo | to build (~1 day; the only novel machinery) |
-| `demo.doax.io` hosting | doax-demo | trivial (same S3+CloudFront pattern) |
+| `demo.app.doax.io` hosting | doax-demo | trivial (same S3+CloudFront pattern) |
 | Mock supplier endpoint for `order-resin` | doax-demo | tiny |

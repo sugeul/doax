@@ -30,6 +30,8 @@ const PACKAGES_BUCKET = process.env.DOAX_PACKAGES_BUCKET ?? "";
 const ADMIN_TOKEN = process.env.DOAX_ADMIN_TOKEN ?? "";
 const AUDIT_LOG_GROUP = process.env.DOAX_AUDIT_LOG_GROUP ?? "";
 const EMAIL_FROM = process.env.DOAX_EMAIL_FROM ?? "";
+const APPS_BUCKET = process.env.DOAX_APPS_BUCKET ?? "";
+const APP_HOST = process.env.DOAX_APP_HOST ?? "app.doax.io";
 
 const s3 = new S3Client({});
 const cw = new CloudWatchLogsClient({});
@@ -243,7 +245,7 @@ app.use(
     "*",
     cors({
         origin: (origin) =>
-            /^https:\/\/([a-z0-9-]+\.)?doax\.io$/.test(origin) || /^http:\/\/localhost(:\d+)?$/.test(origin)
+            /^https:\/\/([a-z0-9-]+\.)*doax\.io$/.test(origin) || /^http:\/\/localhost(:\d+)?$/.test(origin)
                 ? origin
                 : "https://doax.io",
         allowHeaders: ["content-type", "authorization", "x-doax-admin-token"],
@@ -609,6 +611,72 @@ app.put("/:ns{@[a-z0-9._-]+}/:namever", async (c) => {
     );
     await appendAudit([{ class: "publish", actor, resource: identity, digest }]);
     return c.json(withManifesto(DOMAIN, { published: identity, digest, package: `/${packageKey(identity)}` }), 201);
+});
+
+/*
+ * doax-app hosting (app.doax.io/<ns>/): deploy a static bundle for a namespace. Same role
+ * gate as publish — owner/publisher of the namespace. Static files only, size-capped,
+ * audited. Mutable by design (an app is a surface, not a Resource; Resources stay immutable).
+ */
+const APP_FILE_PATH = /^[a-zA-Z0-9][a-zA-Z0-9._/-]*$/;
+const APP_CONTENT_TYPES: Record<string, string> = {
+    html: "text/html; charset=utf-8",
+    js: "text/javascript; charset=utf-8",
+    mjs: "text/javascript; charset=utf-8",
+    css: "text/css; charset=utf-8",
+    json: "application/json; charset=utf-8",
+    csv: "text/csv; charset=utf-8",
+    txt: "text/plain; charset=utf-8",
+    svg: "image/svg+xml",
+    png: "image/png",
+    ico: "image/x-icon",
+    webp: "image/webp",
+    woff2: "font/woff2",
+    map: "application/json",
+};
+
+app.put("/apps/:ns{@[a-z0-9._-]+}", async (c) => {
+    if (!APPS_BUCKET) return c.json(withManifesto(DOMAIN, { error: "app hosting is not configured on this registry" }), 501);
+    const ns = c.req.param("ns");
+    if (!NAMESPACE_NAME.test(ns)) return c.json(withManifesto(DOMAIN, { error: `invalid namespace: ${ns}` }), 400);
+    await ensureSchema();
+    const admin = isAdmin(c);
+    const principal = admin ? null : await principalFrom(c);
+    if (!admin) {
+        if (!principal) return c.json(withManifesto(DOMAIN, { error: "app deploy requires a Bearer token" }), 401);
+        if (!SHARED_NAMESPACES.has(ns) && !(await hasRole(principal, ns.slice(1), ["owner", "publisher"]))) {
+            return c.json(withManifesto(DOMAIN, { error: `${principal} is not an owner/publisher of ${ns}` }), 403);
+        }
+    }
+    const body = (await c.req.json().catch(() => null)) as { files?: { path?: string; content?: string }[] } | null;
+    if (!body?.files?.length) return c.json(withManifesto(DOMAIN, { error: "body must be { files: [{ path, content: base64 }] }" }), 400);
+    if (body.files.length > 60) return c.json(withManifesto(DOMAIN, { error: "at most 60 files per app" }), 400);
+    let total = 0;
+    for (const file of body.files) {
+        if (!file.path || !APP_FILE_PATH.test(file.path) || file.path.includes("..") || typeof file.content !== "string") {
+            return c.json(withManifesto(DOMAIN, { error: `bad file entry: ${file.path ?? "(missing path)"}` }), 400);
+        }
+        const bytes = Buffer.byteLength(file.content, "base64");
+        if (bytes > 2_000_000) return c.json(withManifesto(DOMAIN, { error: `${file.path} exceeds 2MB` }), 400);
+        total += bytes;
+    }
+    if (total > 15_000_000) return c.json(withManifesto(DOMAIN, { error: "bundle exceeds 15MB" }), 400);
+
+    const slug = ns.slice(1);
+    for (const file of body.files) {
+        const ext = file.path!.split(".").pop()!.toLowerCase();
+        await s3.send(
+            new PutObjectCommand({
+                Bucket: APPS_BUCKET,
+                Key: `${slug}/${file.path}`,
+                Body: Buffer.from(file.content!, "base64"),
+                ContentType: APP_CONTENT_TYPES[ext] ?? "application/octet-stream",
+                CacheControl: "public, max-age=300",
+            }),
+        );
+    }
+    await appendAudit([{ class: "publish", actor: principal ?? "operator", resource: `app:${ns}`, files: body.files.length }]);
+    return c.json(withManifesto(DOMAIN, { deployed: ns, files: body.files.length, url: `https://${slug}.${APP_HOST}/` }), 201);
 });
 
 /**
