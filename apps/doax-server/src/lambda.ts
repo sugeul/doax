@@ -238,11 +238,12 @@ const manifesto = buildManifesto(
 
 const app = new Hono();
 
+// doax-apps (browser consumers) live on *.doax.io and localhost during development.
 app.use(
     "*",
     cors({
         origin: (origin) =>
-            origin === "https://doax.io" || origin === "https://www.doax.io" || /^http:\/\/localhost(:\d+)?$/.test(origin)
+            /^https:\/\/([a-z0-9-]+\.)?doax\.io$/.test(origin) || /^http:\/\/localhost(:\d+)?$/.test(origin)
                 ? origin
                 : "https://doax.io",
         allowHeaders: ["content-type", "authorization", "x-doax-admin-token"],

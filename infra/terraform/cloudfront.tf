@@ -63,6 +63,8 @@ resource "aws_cloudfront_distribution" "main" {
     allowed_methods        = ["GET", "HEAD"]
     cached_methods         = ["GET", "HEAD"]
     cache_policy_id        = local.cache_optimized_policy_id
+    # Browser doax-apps fetch packages cross-origin; SimpleCORS stamps ACAO:* at the edge.
+    response_headers_policy_id = data.aws_cloudfront_response_headers_policy.simple_cors.id
   }
 
   restrictions {
