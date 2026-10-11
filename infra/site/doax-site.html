@@ -409,7 +409,7 @@ vec3 calcNormal(vec3 p){
 
 void main(){
   vec2 uv = (gl_FragCoord.xy - 0.5*u_res) / u_res.y;
-  gMorph = smoothstep(0.40, 0.94, u_scroll);
+  gMorph = smoothstep(0.15, 0.69, u_scroll);
 
   vec3 ro = vec3(0.0, 0.0, 4.6);
   vec3 rd = normalize(vec3(uv, -1.7));
