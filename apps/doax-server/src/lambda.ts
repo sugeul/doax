@@ -9,6 +9,7 @@ import {
     PutLogEventsCommand,
 } from "@aws-sdk/client-cloudwatch-logs";
 import { HeadBucketCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { SendEmailCommand, SESv2Client } from "@aws-sdk/client-sesv2";
 import pg from "pg";
 import { MOUNTS } from "@doax/config";
 import { buildManifesto, withManifesto } from "@doax/protocol";
@@ -28,9 +29,11 @@ const OPERATOR = process.env.DOAX_OPERATOR ?? "unconfigured";
 const PACKAGES_BUCKET = process.env.DOAX_PACKAGES_BUCKET ?? "";
 const ADMIN_TOKEN = process.env.DOAX_ADMIN_TOKEN ?? "";
 const AUDIT_LOG_GROUP = process.env.DOAX_AUDIT_LOG_GROUP ?? "";
+const EMAIL_FROM = process.env.DOAX_EMAIL_FROM ?? "";
 
 const s3 = new S3Client({});
 const cw = new CloudWatchLogsClient({});
+const ses = new SESv2Client({});
 const db = process.env.DOAX_DB_HOST
     ? new pg.Pool({
           host: process.env.DOAX_DB_HOST,
@@ -85,6 +88,13 @@ function ensureSchema(): Promise<void> {
                 principal_id TEXT NOT NULL REFERENCES principals(principal_id),
                 role         TEXT NOT NULL CHECK (role IN ('owner', 'publisher', 'reader')),
                 PRIMARY KEY (namespace, principal_id)
+            );
+            CREATE TABLE IF NOT EXISTS email_logins (
+                email      TEXT PRIMARY KEY,
+                code_hash  TEXT NOT NULL,
+                attempts   INT NOT NULL DEFAULT 0,
+                expires_at TIMESTAMPTZ NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now()
             );
             -- @global: the shared namespace every authenticated principal may publish into.
             INSERT INTO principals (principal_id, display_name) VALUES ('operator', 'registry operator')
@@ -273,6 +283,68 @@ app.get("/healthz/deep", async (c) => {
     ]);
     const status = database.ok && storage.ok ? "ok" : "degraded";
     return c.json(withManifesto(DOMAIN, { status, database, storage }), status === "ok" ? 200 : 503);
+});
+
+const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/** Email sign-in, step 1 (pre-OIDC spec delta): send a 6-digit code. Proof of inbox = identity. */
+app.post("/auth/email", async (c) => {
+    const body = (await c.req.json().catch(() => null)) as { email?: string } | null;
+    const email = body?.email?.trim().toLowerCase() ?? "";
+    if (!EMAIL.test(email)) return c.json(withManifesto(DOMAIN, { error: "body needs a valid email" }), 400);
+    await ensureSchema();
+    const code = String(Math.floor(100000 + Math.random() * 900000));
+    await db!.query(
+        `INSERT INTO email_logins (email, code_hash, attempts, expires_at) VALUES ($1, $2, 0, now() + interval '10 minutes')
+         ON CONFLICT (email) DO UPDATE SET code_hash = EXCLUDED.code_hash, attempts = 0, expires_at = EXCLUDED.expires_at, created_at = now()`,
+        [email, hashToken(code)],
+    );
+    await ses.send(
+        new SendEmailCommand({
+            FromEmailAddress: `doax <${EMAIL_FROM}>`,
+            Destination: { ToAddresses: [email] },
+            Content: {
+                Simple: {
+                    Subject: { Data: `doax sign-in code: ${code}` },
+                    Body: {
+                        Text: {
+                            Data: `Your doax sign-in code is ${code}\n\nIt expires in 10 minutes. If you did not request it, ignore this mail.\n\n— ${DOMAIN}`,
+                        },
+                    },
+                },
+            },
+        }),
+    );
+    await appendAudit([{ class: "auth", actor: email, resource: "registry:email-login", mode: "code-sent" }]);
+    return c.json(withManifesto(DOMAIN, { sent: true, email, expiresInMinutes: 10 }));
+});
+
+/** Email sign-in, step 2: verify the code, create the principal if new, issue a token. */
+app.post("/auth/verify", async (c) => {
+    const body = (await c.req.json().catch(() => null)) as { email?: string; code?: string } | null;
+    const email = body?.email?.trim().toLowerCase() ?? "";
+    const code = body?.code?.trim() ?? "";
+    if (!EMAIL.test(email) || !/^\d{6}$/.test(code)) {
+        return c.json(withManifesto(DOMAIN, { error: "body needs { email, code: 6 digits }" }), 400);
+    }
+    await ensureSchema();
+    const { rows } = await db!.query<{ code_hash: string; attempts: number; expired: boolean }>(
+        `UPDATE email_logins SET attempts = attempts + 1 WHERE email = $1
+         RETURNING code_hash, attempts, (expires_at < now()) AS expired`,
+        [email],
+    );
+    const row = rows[0];
+    const ok = row && !row.expired && row.attempts <= 5 && row.code_hash === hashToken(code);
+    if (!ok) {
+        await appendAudit([{ class: "auth", actor: email, resource: "registry:email-login", mode: "verify", outcome: "failure" }]);
+        return c.json(withManifesto(DOMAIN, { error: "code invalid, expired, or too many attempts — request a new one" }), 401);
+    }
+    await db!.query(`DELETE FROM email_logins WHERE email = $1`, [email]);
+    await db!.query(`INSERT INTO principals (principal_id, display_name) VALUES ($1, $1) ON CONFLICT DO NOTHING`, [email]);
+    const token = `doax_pat_${randomUUID().replaceAll("-", "")}${randomUUID().replaceAll("-", "")}`;
+    await db!.query(`INSERT INTO access_tokens (token_hash, principal_id, note) VALUES ($1, $2, 'email login')`, [hashToken(token), email]);
+    await appendAudit([{ class: "auth", actor: email, resource: "registry:email-login", mode: "verify", outcome: "success" }]);
+    return c.json(withManifesto(DOMAIN, { principal: email, token, note: "store this token; it is not shown again" }), 201);
 });
 
 app.get("/whoami", async (c) => {

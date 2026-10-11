@@ -49,8 +49,8 @@ Usage:
                                               Dry-run or execute an action
     doax publish <manifest.json> <package-file>  Publish a resource (identity comes from the manifest;
                                               @global accepts anyone logged in, other namespaces need a role)
-    doax login [--token <pat>] [--registry <url>]
-                                              Store your registry token (asks to verify via /whoami)
+    doax login [--email <you@x>] [--code <6 digits>] [--token <pat>] [--registry <url>]
+                                              Sign in: email gets a code, code gets a token; or store a token directly
     doax logout [--registry <url>]            Drop the stored token
     doax whoami                               Show your principal and namespaces
     doax audit [--class <c>] [--actor <a>] [--resource <@ns/name>] [--since <iso>] [--limit <n>]
@@ -132,6 +132,8 @@ export async function run(argv: string[], deps: CliDeps = defaultDeps()): Promis
             limit: { type: "string" },
             token: { type: "string" },
             registry: { type: "string" },
+            email: { type: "string" },
+            code: { type: "string" },
         },
         allowPositionals: true,
         strict: false,
@@ -253,8 +255,42 @@ async function loginCmd(deps: CliDeps, values: Record<string, unknown>, json: bo
     const xdeps = executorDeps(deps);
     const origin = ((values.registry as string | undefined) ?? readRegistryMap(xdeps).default).replace(/\/+$/, "");
     let token = values.token as string | undefined;
+
+    // Email sign-in: request a code, verify it, receive the token.
+    let email = values.email as string | undefined;
+    if (!token && !email && xdeps.prompt) email = (await xdeps.prompt(`email for ${origin} (or leave empty to paste a token): `)).trim() || undefined;
+    if (!token && email) {
+        let code = values.code as string | undefined;
+        if (!code) {
+            const sent = await deps.fetch(`${origin}/auth/email`, {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ email }),
+            });
+            const sentBody = (await sent.json()) as { error?: string };
+            if (!sent.ok) return { exitCode: 1, stderr: `doax login: ${sentBody.error ?? sent.status}` };
+            if (!xdeps.prompt) {
+                return {
+                    exitCode: 0,
+                    stdout: json
+                        ? JSON.stringify({ ok: true, sent: true, email, next: `doax login --email ${email} --code <6 digits>` })
+                        : `code sent to ${email} — re-run: doax login --email ${email} --code <6 digits>`,
+                };
+            }
+            code = (await xdeps.prompt(`code sent to ${email} — enter it: `)).trim();
+        }
+        const verified = await deps.fetch(`${origin}/auth/verify`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ email, code }),
+        });
+        const verifyBody = (await verified.json()) as { token?: string; error?: string };
+        if (!verified.ok || !verifyBody.token) return { exitCode: 1, stderr: `doax login: ${verifyBody.error ?? verified.status}` };
+        token = verifyBody.token;
+    }
+
     if (!token && xdeps.prompt) token = (await xdeps.prompt(`token for ${origin} (doax_pat_..., input is echoed): `)).trim();
-    if (!token) return { exitCode: 2, stderr: "doax login: provide --token (or run interactively)" };
+    if (!token) return { exitCode: 2, stderr: "doax login: provide --email or --token (or run interactively)" };
     const res = await deps.fetch(`${origin}/whoami`, { headers: { authorization: `Bearer ${token}` } });
     const body = (await res.json()) as { principal?: string; namespaces?: string[]; error?: string };
     if (!res.ok || !body.principal) {

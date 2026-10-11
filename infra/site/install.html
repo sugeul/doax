@@ -118,6 +118,16 @@
         <tr><td><code>--yes</code></td><td>grant tier-2 per-call authorization</td></tr>
     </table>
 
+    <h2>Sign in</h2>
+    <pre><span class="p">$</span> doax login --email you@example.com
+<span class="c"># a 6-digit code arrives by mail; enter it (or re-run with --code 123456)</span>
+<span class="p">$</span> doax whoami</pre>
+    <p>Proof of your inbox is your identity — no password, no account form. Signing in lets you claim a namespace (<code>POST /namespaces</code>), publish into it, publish to the shared <code>@global</code> namespace, and query the audit trail of your own namespaces with <code>doax audit</code>.</p>
+
+    <h2>Publish a resource</h2>
+    <pre><span class="p">$</span> doax publish my-resource.manifest.json my-resource.mjs
+<span class="c"># @global accepts anyone signed in; your own @namespace needs the owner/publisher role</span></pre>
+
     <h2>Private registries</h2>
     <p>The CLI holds a <em>list</em> of registries and resolves each resource from the one that owns its namespace — the npm scoped-registry model:</p>
     <pre><span class="p">$</span> doax registry add @mate https://kachit.ai/registry
