@@ -10,9 +10,10 @@ import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const registry = (process.argv[2] ?? "https://registry.doax.io").replace(/\/+$/, "");
-const token = process.env.DOAX_ADMIN_TOKEN;
-if (!token) {
-    console.error("DOAX_ADMIN_TOKEN is required");
+const bearer = process.env.DOAX_TOKEN; // a principal's PAT (owner/publisher of the namespace)
+const admin = process.env.DOAX_ADMIN_TOKEN; // or the operator token
+if (!bearer && !admin) {
+    console.error("set DOAX_TOKEN (publisher PAT) or DOAX_ADMIN_TOKEN (operator)");
     process.exit(2);
 }
 
@@ -208,8 +209,10 @@ const RESOURCES = [
 
 for (const resource of RESOURCES) {
     const pkg = await readFile(join(here, "packages", resource.file));
-    const headers = { "content-type": "application/json", "x-doax-admin-token": token };
-    if (process.env.DOAX_FORCE === "1") headers["x-doax-admin-force"] = "true"; // pre-public re-seed only
+    const headers = { "content-type": "application/json" };
+    if (bearer) headers.authorization = `Bearer ${bearer}`;
+    else headers["x-doax-admin-token"] = admin;
+    if (process.env.DOAX_FORCE === "1") headers["x-doax-admin-force"] = "true"; // pre-public re-seed, operator only
     const res = await fetch(`${registry}/${resource.identity}`, {
         method: "PUT",
         headers,

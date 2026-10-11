@@ -21,8 +21,10 @@ import {
     readRegistryMap,
     type ResolvedResource,
     resolveResource,
+    tokenFor,
     writeCredential,
     writeRegistryEntry,
+    writeToken,
 } from "./executor.ts";
 
 export const VERSION = "0.2.0";
@@ -45,8 +47,12 @@ Usage:
                                               Read a data-source (or its metadata)
     doax execute <@ns/name[@version]> [--param k=v ...] [--dry-run] [--yes] [--secret <value>]
                                               Dry-run or execute an action
+    doax login [--token <pat>] [--registry <url>]
+                                              Store your registry token (asks to verify via /whoami)
+    doax logout [--registry <url>]            Drop the stored token
+    doax whoami                               Show your principal and namespaces
     doax audit [--class <c>] [--actor <a>] [--resource <@ns/name>] [--since <iso>] [--limit <n>]
-                                              Query the audit log (operator: DOAX_ADMIN_TOKEN)
+                                              Query the audit log for your namespaces (owners see their events)
     doax --version | --help
 
 Every command runs non-interactively for agent callers:
@@ -122,6 +128,8 @@ export async function run(argv: string[], deps: CliDeps = defaultDeps()): Promis
             since: { type: "string" },
             until: { type: "string" },
             limit: { type: "string" },
+            token: { type: "string" },
+            registry: { type: "string" },
         },
         allowPositionals: true,
         strict: false,
@@ -154,6 +162,16 @@ export async function run(argv: string[], deps: CliDeps = defaultDeps()): Promis
                 return await executeCmd(deps, rest[0], values, json);
             case "audit":
                 return await auditCmd(deps, values, json);
+            case "login":
+                return await loginCmd(deps, values, json);
+            case "logout": {
+                const xd = executorDeps(deps);
+                const origin = (values.registry as string | undefined) ?? readRegistryMap(xd).default;
+                writeToken(xd, origin, null);
+                return { exitCode: 0, stdout: json ? JSON.stringify({ ok: true, loggedOut: origin }) : `logged out of ${origin}` };
+            }
+            case "whoami":
+                return await whoamiCmd(deps, json);
             default:
                 return { exitCode: 2, stderr: `doax: unknown command "${command}"\n` + USAGE };
         }
@@ -193,16 +211,50 @@ async function status(deps: CliDeps): Promise<CliResult> {
     }
 }
 
-/** Audit query (spec §8.5). Operator-gated until permission control lands. */
+async function loginCmd(deps: CliDeps, values: Record<string, unknown>, json: boolean): Promise<CliResult> {
+    const xdeps = executorDeps(deps);
+    const origin = ((values.registry as string | undefined) ?? readRegistryMap(xdeps).default).replace(/\/+$/, "");
+    let token = values.token as string | undefined;
+    if (!token && xdeps.prompt) token = (await xdeps.prompt(`token for ${origin} (doax_pat_..., input is echoed): `)).trim();
+    if (!token) return { exitCode: 2, stderr: "doax login: provide --token (or run interactively)" };
+    const res = await deps.fetch(`${origin}/whoami`, { headers: { authorization: `Bearer ${token}` } });
+    const body = (await res.json()) as { principal?: string; namespaces?: string[]; error?: string };
+    if (!res.ok || !body.principal) {
+        return { exitCode: 1, stderr: json ? JSON.stringify({ ok: false, error: body.error ?? res.status }) : `doax login: ${origin} rejected the token (${body.error ?? res.status})` };
+    }
+    writeToken(xdeps, origin, token);
+    return {
+        exitCode: 0,
+        stdout: json
+            ? JSON.stringify({ ok: true, registry: origin, principal: body.principal, namespaces: body.namespaces ?? [] })
+            : `logged in to ${origin} as ${body.principal} (namespaces: ${(body.namespaces ?? []).join(", ") || "none"})`,
+    };
+}
+
+async function whoamiCmd(deps: CliDeps, json: boolean): Promise<CliResult> {
+    const xdeps = executorDeps(deps);
+    const origin = readRegistryMap(xdeps).default;
+    const token = tokenFor(xdeps, origin);
+    if (!token) return { exitCode: 1, stderr: `doax whoami: not logged in to ${origin}; run doax login` };
+    const res = await deps.fetch(`${origin}/whoami`, { headers: { authorization: `Bearer ${token}` } });
+    const body = (await res.json()) as { principal?: string; namespaces?: string[]; error?: string };
+    if (!res.ok) return { exitCode: 1, stderr: `doax whoami: ${body.error ?? res.status}` };
+    return { exitCode: 0, stdout: json ? JSON.stringify({ ok: true, ...body }) : `${body.principal} @ ${origin}\nnamespaces: ${(body.namespaces ?? []).join(", ") || "none"}` };
+}
+
+/** Audit query (spec §8.5): your token sees your namespaces; the operator token sees all. */
 async function auditCmd(deps: CliDeps, values: Record<string, unknown>, json: boolean): Promise<CliResult> {
-    const base = readRegistryMap(executorDeps(deps)).default;
-    const token = process.env.DOAX_ADMIN_TOKEN;
-    if (!token) return { exitCode: 2, stderr: "doax audit: set DOAX_ADMIN_TOKEN (operator-only until permission control lands)" };
+    const xdeps = executorDeps(deps);
+    const base = readRegistryMap(xdeps).default;
+    const bearer = tokenFor(xdeps, base);
+    const admin = process.env.DOAX_ADMIN_TOKEN;
+    if (!bearer && !admin) return { exitCode: 2, stderr: "doax audit: log in first (doax login), or set DOAX_ADMIN_TOKEN as the operator" };
     const url = new URL(`${base}/audit`);
     for (const key of ["class", "actor", "resource", "since", "until", "limit"] as const) {
         if (typeof values[key] === "string" && values[key]) url.searchParams.set(key, values[key] as string);
     }
-    const res = await deps.fetch(url, { headers: { "x-doax-admin-token": token } });
+    const headers: Record<string, string> = bearer ? { authorization: `Bearer ${bearer}` } : { "x-doax-admin-token": admin! };
+    const res = await deps.fetch(url, { headers });
     const body = (await res.json()) as { events?: Record<string, unknown>[]; count?: number; error?: string };
     if (!res.ok || !body.events) {
         return { exitCode: 1, stderr: json ? JSON.stringify({ ok: false, error: body.error ?? res.status }) : `doax audit: ${body.error ?? res.status}` };

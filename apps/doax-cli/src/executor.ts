@@ -85,6 +85,42 @@ export function registryFor(deps: ExecutorDeps, namespace: string): string {
     return map.scopes[`@${namespace}`] ?? map.default;
 }
 
+/* ---------- registry tokens (phase-1 PATs; §7.2 tokens replace the value, not the plumbing) ---------- */
+
+export function readTokens(deps: ExecutorDeps): Record<string, string> {
+    try {
+        const file = JSON.parse(readFileSync(configPath(deps), "utf8")) as { tokens?: Record<string, string> };
+        return file.tokens ?? {};
+    } catch {
+        return {};
+    }
+}
+
+export function writeToken(deps: ExecutorDeps, origin: string, token: string | null): void {
+    let file: { registries?: Record<string, string>; tokens?: Record<string, string> } = {};
+    try {
+        file = JSON.parse(readFileSync(configPath(deps), "utf8")) as typeof file;
+    } catch {
+        /* new config */
+    }
+    file.tokens ??= {};
+    const key = origin.replace(/\/+$/, "");
+    if (token) file.tokens[key] = token;
+    else delete file.tokens[key];
+    mkdirSync(deps.home, { recursive: true });
+    writeFileSync(configPath(deps), JSON.stringify(file, null, 2));
+    chmodSync(configPath(deps), 0o600);
+}
+
+export function tokenFor(deps: ExecutorDeps, origin: string): string | undefined {
+    return readTokens(deps)[origin.replace(/\/+$/, "")];
+}
+
+export function authHeaders(deps: ExecutorDeps, origin: string): Record<string, string> {
+    const token = tokenFor(deps, origin);
+    return token ? { authorization: `Bearer ${token}` } : {};
+}
+
 export interface ExecutorDeps {
     config: CliConfig;
     fetch: typeof fetch;
@@ -112,7 +148,7 @@ export async function resolveResource(deps: ExecutorDeps, ref: string): Promise<
     const parsed = parseResourceRef(ref);
     const canonical = formatResourceRef(parsed);
     const origin = registryFor(deps, parsed.namespace);
-    const res = await deps.fetch(`${origin}/${canonical}`);
+    const res = await deps.fetch(`${origin}/${canonical}`, { headers: authHeaders(deps, origin) });
     const body = (await res.json()) as ResolvedResource & { error?: string };
     if (!res.ok) throw new ExecutorError(`resolve ${canonical} at ${origin}: ${body.error ?? res.status}`, "resolve-failed");
     return { ...body, origin };

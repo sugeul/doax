@@ -63,10 +63,73 @@ function ensureSchema(): Promise<void> {
                 published_at TIMESTAMPTZ NOT NULL DEFAULT now(),
                 PRIMARY KEY (namespace, name, version)
             );
+            CREATE TABLE IF NOT EXISTS principals (
+                principal_id TEXT PRIMARY KEY,
+                display_name TEXT NOT NULL DEFAULT '',
+                created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+            );
+            CREATE TABLE IF NOT EXISTS access_tokens (
+                token_hash   TEXT PRIMARY KEY,
+                principal_id TEXT NOT NULL REFERENCES principals(principal_id),
+                note         TEXT NOT NULL DEFAULT '',
+                created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+                expires_at   TIMESTAMPTZ
+            );
+            CREATE TABLE IF NOT EXISTS namespaces (
+                name       TEXT PRIMARY KEY,
+                owner      TEXT NOT NULL REFERENCES principals(principal_id),
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            );
+            CREATE TABLE IF NOT EXISTS namespace_members (
+                namespace    TEXT NOT NULL REFERENCES namespaces(name),
+                principal_id TEXT NOT NULL REFERENCES principals(principal_id),
+                role         TEXT NOT NULL CHECK (role IN ('owner', 'publisher', 'reader')),
+                PRIMARY KEY (namespace, principal_id)
+            );
         `);
     })();
     return schemaReady;
 }
+
+/* ---------- permission control (phase 1: registry PATs; §7.2 OIDC tokens swap in later) ---------- */
+
+const PRINCIPAL_ID = /^[a-z0-9][a-z0-9._-]*$/;
+const NAMESPACE_NAME = /^@[a-z0-9][a-z0-9._-]*$/;
+
+const hashToken = (token: string) => createHash("sha256").update(token).digest("hex");
+
+/** Resolve the Bearer principal, or null for anonymous callers. */
+async function principalFrom(c: { req: { header(name: string): string | undefined } }): Promise<string | null> {
+    const header = c.req.header("authorization") ?? "";
+    const match = /^Bearer\s+(.+)$/i.exec(header);
+    if (!match) return null;
+    await ensureSchema();
+    const { rows } = await db!.query<{ principal_id: string }>(
+        `SELECT principal_id FROM access_tokens WHERE token_hash = $1 AND (expires_at IS NULL OR expires_at > now())`,
+        [hashToken(match[1]!)],
+    );
+    return rows[0]?.principal_id ?? null;
+}
+
+/** Namespaces where the principal holds one of the given roles. */
+async function namespacesOf(principal: string, roles: string[]): Promise<string[]> {
+    const { rows } = await db!.query<{ namespace: string }>(
+        `SELECT namespace FROM namespace_members WHERE principal_id = $1 AND role = ANY($2)`,
+        [principal, roles],
+    );
+    return rows.map((r) => r.namespace);
+}
+
+async function hasRole(principal: string, namespace: string, roles: string[]): Promise<boolean> {
+    const { rows } = await db!.query(
+        `SELECT 1 FROM namespace_members WHERE namespace = $1 AND principal_id = $2 AND role = ANY($3)`,
+        [`@${namespace}`, principal, roles],
+    );
+    return rows.length > 0;
+}
+
+const isAdmin = (c: { req: { header(name: string): string | undefined } }) =>
+    Boolean(ADMIN_TOKEN) && c.req.header("x-doax-admin-token") === ADMIN_TOKEN;
 
 /*
  * Audit store: CloudWatch Logs (append-only by construction — log events cannot be edited or
@@ -204,6 +267,90 @@ app.get("/healthz/deep", async (c) => {
     return c.json(withManifesto(DOMAIN, { status, database, storage }), status === "ok" ? 200 : 503);
 });
 
+app.get("/whoami", async (c) => {
+    const principal = await principalFrom(c);
+    if (!principal) return c.json(withManifesto(DOMAIN, { error: "no valid token" }), 401);
+    const namespaces = await namespacesOf(principal, ["owner", "publisher", "reader"]);
+    return c.json(withManifesto(DOMAIN, { principal, namespaces }));
+});
+
+/** Create a principal and issue a PAT (operator-only bootstrap; §7.2 OIDC replaces this). */
+app.post("/principals", async (c) => {
+    if (!isAdmin(c)) return c.json(withManifesto(DOMAIN, { error: "requires x-doax-admin-token" }), 401);
+    const body = (await c.req.json().catch(() => null)) as { principalId?: string; displayName?: string } | null;
+    if (!body?.principalId || !PRINCIPAL_ID.test(body.principalId)) {
+        return c.json(withManifesto(DOMAIN, { error: "body needs principalId matching [a-z0-9][a-z0-9._-]*" }), 400);
+    }
+    await ensureSchema();
+    await db!.query(
+        `INSERT INTO principals (principal_id, display_name) VALUES ($1, $2) ON CONFLICT (principal_id) DO NOTHING`,
+        [body.principalId, body.displayName ?? body.principalId],
+    );
+    const token = `doax_pat_${randomUUID().replaceAll("-", "")}${randomUUID().replaceAll("-", "")}`;
+    await db!.query(`INSERT INTO access_tokens (token_hash, principal_id, note) VALUES ($1, $2, $3)`, [
+        hashToken(token),
+        body.principalId,
+        "issued by operator",
+    ]);
+    await appendAudit([{ class: "auth", actor: body.principalId, resource: "registry:token", mode: "issue" }]);
+    return c.json(withManifesto(DOMAIN, { principal: body.principalId, token, note: "store this token; it is not shown again" }), 201);
+});
+
+/** Claim a free namespace (self-serve; first come, first owner). */
+app.post("/namespaces", async (c) => {
+    const principal = await principalFrom(c);
+    if (!principal) return c.json(withManifesto(DOMAIN, { error: "namespace creation requires a Bearer token" }), 401);
+    const body = (await c.req.json().catch(() => null)) as { name?: string } | null;
+    if (!body?.name || !NAMESPACE_NAME.test(body.name)) {
+        return c.json(withManifesto(DOMAIN, { error: "body needs name matching @namespace" }), 400);
+    }
+    const claimed = await db!.query(
+        `INSERT INTO namespaces (name, owner) VALUES ($1, $2) ON CONFLICT DO NOTHING RETURNING name`,
+        [body.name, principal],
+    );
+    if (claimed.rowCount === 0) return c.json(withManifesto(DOMAIN, { error: `${body.name} is already owned` }), 409);
+    await db!.query(`INSERT INTO namespace_members (namespace, principal_id, role) VALUES ($1, $2, 'owner')`, [body.name, principal]);
+    return c.json(withManifesto(DOMAIN, { namespace: body.name, owner: principal }), 201);
+});
+
+app.get("/namespaces/:ns{@[a-z0-9._-]+}", async (c) => {
+    await ensureSchema();
+    const name = c.req.param("ns");
+    const { rows } = await db!.query<{ name: string; owner: string }>(`SELECT name, owner FROM namespaces WHERE name = $1`, [name]);
+    if (!rows[0]) return c.json(withManifesto(DOMAIN, { error: `not found: ${name}` }), 404);
+    const principal = await principalFrom(c);
+    const self = principal ? await hasRole(principal, name.slice(1), ["owner", "publisher", "reader"]) : false;
+    const members =
+        self || isAdmin(c)
+            ? (await db!.query<{ principal_id: string; role: string }>(`SELECT principal_id, role FROM namespace_members WHERE namespace = $1`, [name])).rows
+            : undefined;
+    return c.json(withManifesto(DOMAIN, { namespace: rows[0].name, owner: rows[0].owner, members }));
+});
+
+/** Owner manages members: role owner|publisher|reader, or "none" to remove. */
+app.put("/namespaces/:ns{@[a-z0-9._-]+}/members", async (c) => {
+    const name = c.req.param("ns");
+    const principal = await principalFrom(c);
+    const admin = isAdmin(c);
+    if (!admin && (!principal || !(await hasRole(principal, name.slice(1), ["owner"])))) {
+        return c.json(withManifesto(DOMAIN, { error: `only the owner of ${name} may manage members` }), 403);
+    }
+    const body = (await c.req.json().catch(() => null)) as { principalId?: string; role?: string } | null;
+    if (!body?.principalId || !["owner", "publisher", "reader", "none"].includes(body.role ?? "")) {
+        return c.json(withManifesto(DOMAIN, { error: "body needs { principalId, role: owner|publisher|reader|none }" }), 400);
+    }
+    if (body.role === "none") {
+        await db!.query(`DELETE FROM namespace_members WHERE namespace = $1 AND principal_id = $2`, [name, body.principalId]);
+    } else {
+        await db!.query(
+            `INSERT INTO namespace_members (namespace, principal_id, role) VALUES ($1, $2, $3)
+             ON CONFLICT (namespace, principal_id) DO UPDATE SET role = EXCLUDED.role`,
+            [name, body.principalId, body.role],
+        );
+    }
+    return c.json(withManifesto(DOMAIN, { namespace: name, principalId: body.principalId, role: body.role }));
+});
+
 /** Search (spec §10). Also feeds the doax.io website's Search tab, hence the flat result fields. */
 app.get("/search", async (c) => {
     await ensureSchema();
@@ -250,12 +397,17 @@ app.post("/audit", async (c) => {
 });
 
 /**
-  * Audit query (spec §8.5) over the CloudWatch store. Operator-gated until permission
-  * control lands; then namespace owners see their namespace's events.
+  * Audit query (spec §8.5) over the CloudWatch store. The operator sees everything; a Bearer
+  * principal sees exactly the events of namespaces they belong to — the owner's governance view.
   */
 app.get("/audit", async (c) => {
-    if (!ADMIN_TOKEN || c.req.header("x-doax-admin-token") !== ADMIN_TOKEN) {
-        return c.json(withManifesto(DOMAIN, { error: "audit query requires a valid x-doax-admin-token" }), 401);
+    const admin = isAdmin(c);
+    let scope: string[] | null = null; // null = unscoped (operator)
+    if (!admin) {
+        const principal = await principalFrom(c);
+        if (!principal) return c.json(withManifesto(DOMAIN, { error: "audit query requires a Bearer token or the operator token" }), 401);
+        scope = await namespacesOf(principal, ["owner", "publisher", "reader"]);
+        if (scope.length === 0) return c.json(withManifesto(DOMAIN, { error: `${principal} belongs to no namespaces` }), 403);
     }
     const q = {
         class: c.req.query("class"),
@@ -265,43 +417,74 @@ app.get("/audit", async (c) => {
         until: c.req.query("until"),
         limit: Math.min(Number(c.req.query("limit") ?? 100) || 100, 1000),
     };
+    if (scope && q.resource && !scope.some((ns) => q.resource!.startsWith(`${ns}/`) || q.resource === ns)) {
+        return c.json(withManifesto(DOMAIN, { error: `resource filter must be inside your namespaces: ${scope.join(", ")}` }), 403);
+    }
     const terms: string[] = [];
     if (q.class) terms.push(`$.class = "${q.class.replaceAll('"', "")}"`);
     if (q.actor) terms.push(`$.actor = "${q.actor.replaceAll('"', "")}"`);
     if (q.resource) terms.push(`$.resource = "${q.resource.replaceAll('"', "")}*"`);
-    const out = await cw.send(
-        new FilterLogEventsCommand({
-            logGroupName: AUDIT_LOG_GROUP,
-            filterPattern: terms.length ? `{ ${terms.join(" && ")} }` : undefined,
-            startTime: q.since ? Date.parse(q.since) || undefined : undefined,
-            endTime: q.until ? Date.parse(q.until) || undefined : undefined,
-            limit: q.limit,
-        }),
-    );
+    else if (scope) terms.push(`(${scope.map((ns) => `$.resource = "${ns}/*"`).join(" || ")})`);
+    // FilterLogEvents reports scan progress: pages can be EMPTY yet carry a nextToken.
+    // Follow the token until we have enough events or the scan is exhausted.
     const seen = new Set<string>();
     const events: unknown[] = [];
-    for (const entry of out.events ?? []) {
-        try {
-            const parsed = JSON.parse(entry.message ?? "") as { eventId?: string };
-            if (parsed.eventId && seen.has(parsed.eventId)) continue;
-            if (parsed.eventId) seen.add(parsed.eventId);
-            events.push(parsed);
-        } catch {
-            /* non-JSON line; skip */
+    let nextToken: string | undefined;
+    let truncated = false;
+    for (let page = 0; page < 25; page++) {
+        const out = await cw.send(
+            new FilterLogEventsCommand({
+                logGroupName: AUDIT_LOG_GROUP,
+                filterPattern: terms.length ? `{ ${terms.join(" && ")} }` : undefined,
+                startTime: q.since ? Date.parse(q.since) || undefined : undefined,
+                endTime: q.until ? Date.parse(q.until) || undefined : undefined,
+                limit: q.limit,
+                nextToken,
+            }),
+        );
+        for (const entry of out.events ?? []) {
+            try {
+                const parsed = JSON.parse(entry.message ?? "") as { eventId?: string };
+                if (parsed.eventId && seen.has(parsed.eventId)) continue;
+                if (parsed.eventId) seen.add(parsed.eventId);
+                events.push(parsed);
+            } catch {
+                /* non-JSON line; skip */
+            }
         }
+        nextToken = out.nextToken;
+        if (!nextToken || events.length >= q.limit) {
+            truncated = Boolean(nextToken);
+            break;
+        }
+        truncated = true; // page budget exhausted while a token remains
     }
-    return c.json(withManifesto(DOMAIN, { count: events.length, truncated: Boolean(out.nextToken), events }));
+    return c.json(withManifesto(DOMAIN, { count: events.length, truncated, events: events.slice(0, q.limit) }));
 });
 
-/** Publish (spec §10, §11). Admin-token-gated until the Auth Server issues §7.2 tokens. */
+/** Publish (spec §10, §11). Requires owner/publisher role in the namespace (or the operator token). */
 app.put("/:ns{@[a-z0-9._-]+}/:namever", async (c) => {
-    if (!ADMIN_TOKEN || c.req.header("x-doax-admin-token") !== ADMIN_TOKEN) {
-        return c.json(withManifesto(DOMAIN, { error: "publish requires a valid x-doax-admin-token" }), 401);
-    }
     const identity = `${c.req.param("ns")}/${c.req.param("namever")}`;
     const match = IDENTITY.exec(identity);
     if (!match || !match[3]) return c.json(withManifesto(DOMAIN, { error: `publish needs @ns/name@version, got ${identity}` }), 400);
     const [, namespace, name, version] = match;
+
+    await ensureSchema();
+    const admin = isAdmin(c);
+    const principal = admin ? null : await principalFrom(c);
+    if (!admin) {
+        if (!principal) return c.json(withManifesto(DOMAIN, { error: "publish requires a Bearer token (or operator token)" }), 401);
+        if (!(await hasRole(principal, namespace!, ["owner", "publisher"]))) {
+            return c.json(
+                withManifesto(DOMAIN, {
+                    error: `${principal} is not an owner/publisher of @${namespace}`,
+                    fix: `claim it (POST /namespaces) if free, or ask the owner to add you as a publisher`,
+                }),
+                403,
+            );
+        }
+    }
+    const actor = principal ?? "operator";
 
     const body = (await c.req.json().catch(() => null)) as { manifest?: Record<string, unknown>; package?: string } | null;
     if (!body?.manifest || typeof body.package !== "string") {
@@ -311,14 +494,13 @@ app.put("/:ns{@[a-z0-9._-]+}/:namever", async (c) => {
         if (!(field in body.manifest)) return c.json(withManifesto(DOMAIN, { error: `manifest missing mandatory field: ${field}` }), 400);
     }
 
-    await ensureSchema();
     const content = Buffer.from(body.package, "base64");
     const digest = `sha256-${createHash("sha256").update(content).digest("hex")}`;
     const manifest: Record<string, unknown> = { ...body.manifest, identity, integrity: digest };
 
-    // Immutability (spec §4.4): a version can be created once, never replaced. The admin-only
-    // force header is a PRE-PUBLIC escape hatch for re-seeding; it is removed at public launch.
-    const force = c.req.header("x-doax-admin-force") === "true";
+    // Immutability (spec §4.4): a version can be created once, never replaced. The force
+    // header is a PRE-PUBLIC escape hatch for re-seeding, OPERATOR-ONLY; removed at public launch.
+    const force = admin && c.req.header("x-doax-admin-force") === "true";
     const inserted = await db!.query(
         force
             ? `INSERT INTO manifests (namespace, name, version, kind, manifest, digest)
@@ -340,7 +522,7 @@ app.put("/:ns{@[a-z0-9._-]+}/:namever", async (c) => {
             ContentType: "text/javascript; charset=utf-8",
         }),
     );
-    await appendAudit([{ class: "publish", actor: "operator", resource: identity, digest }]);
+    await appendAudit([{ class: "publish", actor, resource: identity, digest }]);
     return c.json(withManifesto(DOMAIN, { published: identity, digest, package: `/${packageKey(identity)}` }), 201);
 });
 
@@ -361,7 +543,15 @@ app.get("/:ns{@[a-z0-9._-]+}/:namever", async (c) => {
     const row = rows[0];
     if (!row) return c.json(withManifesto(DOMAIN, { error: `not found: ${ref}` }), 404);
 
-    await appendAudit([{ class: "resolve", actor: "anonymous", resource: `@${row.namespace}/${row.name}@${row.version}` }]);
+    // Visibility (spec §4.5): namespace-only resources resolve for members alone; hidden otherwise.
+    const principal = await principalFrom(c);
+    if (row.visibility !== "public" && !isAdmin(c)) {
+        if (!principal || !(await hasRole(principal, row.namespace, ["owner", "publisher", "reader"]))) {
+            return c.json(withManifesto(DOMAIN, { error: `not found: ${ref}` }), 404);
+        }
+    }
+
+    await appendAudit([{ class: "resolve", actor: principal ?? "anonymous", resource: `@${row.namespace}/${row.name}@${row.version}` }]);
     const body = resolveBody(row);
     return c.json(
         withManifesto(DOMAIN, row.lifecycle === "deprecated" ? { ...body, warning: `${body.identity} is deprecated` } : body),
