@@ -22,6 +22,16 @@ resource "aws_s3_object" "index" {
   cache_control = "public, max-age=300"
 }
 
+# AYA agent-first onboarding (https://askyouragent.sh), served at https://doax.io/aya.html
+resource "aws_s3_object" "aya" {
+  bucket        = aws_s3_bucket.site.id
+  key           = "aya.html"
+  source        = "${path.module}/../site/aya.html"
+  etag          = filemd5("${path.module}/../site/aya.html")
+  content_type  = "text/html; charset=utf-8"
+  cache_control = "public, max-age=300"
+}
+
 # The CLI install guide, served at https://doax.io/install
 resource "aws_s3_object" "install_page" {
   bucket        = aws_s3_bucket.site.id

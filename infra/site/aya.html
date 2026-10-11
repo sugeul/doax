@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>doax — AYA</title></head><body><pre>
+Install the doax CLI and use registry resources on behalf of your user. This file is complete; fetch nothing else unless a task below requires it.
+
+# Value
+doax is a registry of data-sources and actions that AI agents use for a human — npm, for agent capabilities. Every access is recorded in an append-only audit log, and every resource declares an authentication tier that can only be strengthened downstream, never weakened.
+
+# Self description
+- Registry API (JSON/HTTPS): https://registry.doax.io  (self-description: /manifesto.json)
+- Spec and source: https://github.com/sugeul/doax  (spec: docs/spec/registry-v0.1.md)
+- Human docs: https://doax.io/install · Live demo app: https://demo.app.doax.io
+
+# Install
+curl -fsSL https://doax.io/install.sh | bash
+# needs Node >= 20 and curl; installs `doax` into ~/.local/bin
+
+# Common tasks — always pass --json --no-input when you are the caller
+1. Find resources        doax search slack --json
+2. Inspect one           doax resolve @demo/machine-status --json
+3. Read a data-source    doax read @demo/machine-status --json --no-input
+4. Run an action safely  doax execute @demo/order-resin --param tons=2 --dry-run --json
+                         # execute without --dry-run performs the real effect
+5. Sign in and publish   doax login --email USER_EMAIL --code CODE   (code arrives in the user's inbox)
+                         doax publish manifest.json package.mjs      # @global accepts anyone signed in
+
+# Agent requirements
+- Tier gates are law. `faultClass: authorization-required` means the human must approve; relay the dry-run result and re-run with --yes only on their explicit yes. Never work around a gate.
+- `willRequireInteraction: true` errors need the human (e.g. a target-system secret); the `fix` field states the exact next command.
+- `integrity-mismatch` is fatal: the package failed sha-256 verification — do not execute, report it.
+- Every resolve/read/execute is audited automatically with your user as actor; do not attempt to suppress this.
+- Private registries: `doax registry add @corp https://registry.corp.internal` routes that namespace; everything else stays on registry.doax.io.
+</pre></body></html>
