@@ -545,7 +545,8 @@ app.get("/search", async (c) => {
         `SELECT DISTINCT ON (namespace, name) namespace, name, version, kind, manifest, digest, visibility, verification, lifecycle
          FROM manifests
          WHERE lifecycle = 'active' AND visibility = 'public'
-           AND ($1 = '' OR namespace ILIKE $2 OR name ILIKE $2 OR manifest->>'summary' ILIKE $2 OR manifest->>'description' ILIKE $2)
+           AND ($1 = '' OR namespace ILIKE $2 OR name ILIKE $2 OR ('@' || namespace || '/' || name) ILIKE $2
+                OR manifest->>'summary' ILIKE $2 OR manifest->>'description' ILIKE $2)
            AND ($3::text IS NULL OR kind = $3)
          ORDER BY namespace, name, published_at DESC
          LIMIT 50`,
