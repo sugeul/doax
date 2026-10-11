@@ -476,7 +476,7 @@ void main(){
     viewSearch.hidden = !s; viewHome.hidden = s;
     window.scrollTo({ top:0, behavior:"auto" });
     running = !s;
-    if (s) { var q=document.getElementById("q"); if(q) q.focus(); }
+    if (s) { var q=document.getElementById("q"); if(q) q.focus(); tryLive(state.q); }
     else if (!reduce) requestAnimationFrame(frame);
   }
   tabHome.addEventListener("click", function(){ show("home"); });
@@ -610,7 +610,7 @@ void main(){
     });
     document.getElementById("count").textContent = list.length + (list.length===1?" resource":" resources");
     var src = document.getElementById("source");
-    src.textContent = state.live ? "live · registry.doax.io" : "example catalog";
+    src.textContent = state.live ? "live · registry.doax.io" : "offline · example catalog";
     src.className = "pill " + (state.live?"live":"ex");
     var el = document.getElementById("results");
     if (!list.length){ el.innerHTML = '<div class="empty">No resource matches <span class="mono">'+esc(state.q)+'</span>. Try <span class="mono">@corp</span> or a kind.</div>'; return; }
@@ -624,16 +624,21 @@ void main(){
         + '</div></article>';
     }).join("");
   }
+  /* The registry is the source of truth: live results always win (even when empty);
+     the embedded example catalog only appears when the registry is unreachable. */
   var liveTimer;
   function tryLive(q){
     clearTimeout(liveTimer);
     liveTimer = setTimeout(function(){
       fetch("https://registry.doax.io/search?q="+encodeURIComponent(q||""), { headers:{accept:"application/json"} })
         .then(function(r){ if(!r.ok) throw 0; return r.json(); })
-        .then(function(d){ if(d&&Array.isArray(d.results)&&d.results.length){ state.items=d.results; state.live=true; render(); } })
-        .catch(function(){});
-    }, 350);
+        .then(function(d){
+          if (d && Array.isArray(d.results)) { state.items = d.results; state.live = true; render(); }
+        })
+        .catch(function(){ if (state.live) { state.items = CATALOG; state.live = false; render(); } });
+    }, q === state.q && !state.live ? 0 : 350);
   }
+  tryLive(state.q);
   document.getElementById("q").addEventListener("input", function(e){ state.q=e.target.value; render(); tryLive(e.target.value); });
   function wire(id,key){ document.getElementById(id).addEventListener("click", function(e){ var b=e.target.closest(".chip"); if(!b)return; [].forEach.call(this.querySelectorAll(".chip"),function(c){c.setAttribute("aria-pressed","false");}); b.setAttribute("aria-pressed","true"); state[key]=b.getAttribute("data-"+key); render(); }); }
   wire("kindFilters","kind"); wire("tierFilters","tier");

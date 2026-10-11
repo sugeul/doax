@@ -1,0 +1,41 @@
+{
+    "identity": "@global/web-fetch@1.0.0",
+    "kind": "data-source",
+    "summary": "Fetch a public web page as a record — no authentication, fully audited",
+    "description": "One collection: public web documents, one record per fetched URL. Read params: url (required, http/https), maxBytes (body preview cap, default 2000). Tier 4: no principal required to run it, but every read still lands in the audit log.",
+    "owner": "sugeul <sugeul.jin@webtoontoday.com>",
+    "requiredTier": 4,
+    "executionLocation": "caller-device",
+    "authenticator": "none",
+    "auditScope": ["metadata-read", "data-read"],
+    "dependencies": [],
+    "interfaceMapping": {
+        "describe": { "kind": "native" },
+        "metadata": { "kind": "native" },
+        "read": { "kind": "native" }
+    },
+    "serviceLevel": {
+        "expectedFaults": [
+            {
+                "faultClass": "bad-url",
+                "trigger": "missing or non-http(s) url parameter",
+                "callerVisibleEffect": "read fails, nothing fetched",
+                "expectedFrequency": "caller error",
+                "recommendedCallerAction": "pass --param url=https://..."
+            },
+            {
+                "faultClass": "target-unreachable",
+                "trigger": "DNS failure, timeout (15s), or connection refused at the target",
+                "callerVisibleEffect": "read fails, nothing fetched",
+                "expectedFrequency": "depends on the target",
+                "recommendedCallerAction": "retry later or check the URL"
+            }
+        ],
+        "degradationBehavior": "fail fast",
+        "dependencyLevels": {},
+        "measurement": "not measured",
+        "supportCommitment": "none",
+        "refreshCadence": "on demand",
+        "latencyTarget": "read completes in < 15s (hard timeout)"
+    }
+}

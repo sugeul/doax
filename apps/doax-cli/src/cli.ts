@@ -47,6 +47,8 @@ Usage:
                                               Read a data-source (or its metadata)
     doax execute <@ns/name[@version]> [--param k=v ...] [--dry-run] [--yes] [--secret <value>]
                                               Dry-run or execute an action
+    doax publish <manifest.json> <package-file>  Publish a resource (identity comes from the manifest;
+                                              @global accepts anyone logged in, other namespaces need a role)
     doax login [--token <pat>] [--registry <url>]
                                               Store your registry token (asks to verify via /whoami)
     doax logout [--registry <url>]            Drop the stored token
@@ -162,6 +164,8 @@ export async function run(argv: string[], deps: CliDeps = defaultDeps()): Promis
                 return await executeCmd(deps, rest[0], values, json);
             case "audit":
                 return await auditCmd(deps, values, json);
+            case "publish":
+                return await publishCmd(deps, rest, json);
             case "login":
                 return await loginCmd(deps, values, json);
             case "logout": {
@@ -209,6 +213,40 @@ async function status(deps: CliDeps): Promise<CliResult> {
     } catch (err) {
         return { exitCode: 1, stderr: `doax status: ${map.default} is unreachable (${(err as Error).message})` };
     }
+}
+
+/** Publish (spec §10): PUT the manifest + package to the registry that owns the namespace. */
+async function publishCmd(deps: CliDeps, rest: string[], json: boolean): Promise<CliResult> {
+    const [manifestPath, packagePath] = rest;
+    if (!manifestPath || !packagePath) return { exitCode: 2, stderr: "doax publish: expected <manifest.json> <package-file>" };
+    const { readFile } = await import("node:fs/promises");
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as { identity?: string };
+    if (!manifest.identity) return { exitCode: 2, stderr: "doax publish: manifest needs an identity (@ns/name@version)" };
+    const parsed = parseResourceRef(manifest.identity);
+    if (!parsed.version) return { exitCode: 2, stderr: `doax publish: identity needs a version: ${manifest.identity}` };
+    const xdeps = executorDeps(deps);
+    const { registryFor: rf, authHeaders: ah } = await import("./executor.ts");
+    const origin = rf(xdeps, parsed.namespace);
+    const auth = ah(xdeps, origin);
+    if (!auth.authorization) {
+        return { exitCode: 1, stderr: `doax publish: not logged in to ${origin}; run doax login` };
+    }
+    const headers: Record<string, string> = { "content-type": "application/json", ...auth };
+    const pkg = await readFile(packagePath);
+    const res = await deps.fetch(`${origin}/${manifest.identity}`, {
+        method: "PUT",
+        headers,
+        body: JSON.stringify({ manifest, package: pkg.toString("base64") }),
+    });
+    const body = (await res.json()) as { published?: string; digest?: string; error?: string; fix?: string };
+    if (!res.ok) {
+        const msg = `${body.error ?? res.status}${body.fix ? `\n  fix: ${body.fix}` : ""}`;
+        return { exitCode: 1, stderr: json ? JSON.stringify({ ok: false, ...body }) : `doax publish: ${msg}` };
+    }
+    return {
+        exitCode: 0,
+        stdout: json ? JSON.stringify({ ok: true, ...body }) : `published ${body.published}\n  digest ${body.digest}\n  at ${origin}`,
+    };
 }
 
 async function loginCmd(deps: CliDeps, values: Record<string, unknown>, json: boolean): Promise<CliResult> {

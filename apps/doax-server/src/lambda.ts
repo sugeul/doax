@@ -86,10 +86,18 @@ function ensureSchema(): Promise<void> {
                 role         TEXT NOT NULL CHECK (role IN ('owner', 'publisher', 'reader')),
                 PRIMARY KEY (namespace, principal_id)
             );
+            -- @global: the shared namespace every authenticated principal may publish into.
+            INSERT INTO principals (principal_id, display_name) VALUES ('operator', 'registry operator')
+                ON CONFLICT DO NOTHING;
+            INSERT INTO namespaces (name, owner) VALUES ('@global', 'operator')
+                ON CONFLICT DO NOTHING;
         `);
     })();
     return schemaReady;
 }
+
+/** @global is open to every authenticated principal; it can never be claimed or member-managed. */
+const SHARED_NAMESPACES = new Set(["@global"]);
 
 /* ---------- permission control (phase 1: registry PATs; §7.2 OIDC tokens swap in later) ---------- */
 
@@ -304,6 +312,9 @@ app.post("/namespaces", async (c) => {
     if (!body?.name || !NAMESPACE_NAME.test(body.name)) {
         return c.json(withManifesto(DOMAIN, { error: "body needs name matching @namespace" }), 400);
     }
+    if (SHARED_NAMESPACES.has(body.name)) {
+        return c.json(withManifesto(DOMAIN, { error: `${body.name} is the shared namespace — publish directly into it` }), 409);
+    }
     const claimed = await db!.query(
         `INSERT INTO namespaces (name, owner) VALUES ($1, $2) ON CONFLICT DO NOTHING RETURNING name`,
         [body.name, principal],
@@ -474,11 +485,12 @@ app.put("/:ns{@[a-z0-9._-]+}/:namever", async (c) => {
     const principal = admin ? null : await principalFrom(c);
     if (!admin) {
         if (!principal) return c.json(withManifesto(DOMAIN, { error: "publish requires a Bearer token (or operator token)" }), 401);
-        if (!(await hasRole(principal, namespace!, ["owner", "publisher"]))) {
+        // @global is open to every authenticated principal; any other namespace needs a role.
+        if (!SHARED_NAMESPACES.has(`@${namespace}`) && !(await hasRole(principal, namespace!, ["owner", "publisher"]))) {
             return c.json(
                 withManifesto(DOMAIN, {
                     error: `${principal} is not an owner/publisher of @${namespace}`,
-                    fix: `claim it (POST /namespaces) if free, or ask the owner to add you as a publisher`,
+                    fix: `publish to @global (open to everyone), claim @${namespace} (POST /namespaces) if free, or ask its owner to add you as a publisher`,
                 }),
                 403,
             );
