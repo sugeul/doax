@@ -19,6 +19,7 @@ if (!bearer && !admin) {
 
 const OWNER = "doax.io operators <registry@doax.io>";
 const AUTHENTICATOR = "@doax/slack-login@1.0.0";
+const TEAMS_AUTHENTICATOR = "@doax/teams-login@1.0.0";
 
 const slackFaults = (extra = []) => [
     {
@@ -59,6 +60,55 @@ const channelFault = {
     callerVisibleEffect: "operation fails, no side effect",
     expectedFrequency: "caller error",
     recommendedCallerAction: "check the channel id and membership",
+};
+
+const graphFaults = (extra = []) => [
+    {
+        faultClass: "missing-scope",
+        trigger: "the signed-in app lacks a delegated Microsoft Graph permission the operation needs",
+        callerVisibleEffect: "operation fails, no side effect; the error points to the app's API permissions",
+        expectedFrequency: "setup-time; once permissions are consented it stops",
+        recommendedCallerAction:
+            "grant the delegated permission in Entra ID (App registrations > API permissions), admin-consent if required, then re-authenticate (doax auth set @doax/teams-login)",
+    },
+    {
+        faultClass: "invalid-auth",
+        trigger: "access token expired or revoked and the refresh token no longer works",
+        callerVisibleEffect: "operation fails, no side effect",
+        expectedFrequency: "access tokens expire ~hourly; normally refreshed silently",
+        recommendedCallerAction: "re-authenticate (doax auth set @doax/teams-login)",
+    },
+    {
+        faultClass: "graph-unavailable",
+        trigger: "Microsoft Graph outage or network failure",
+        callerVisibleEffect: "operation fails, no side effect",
+        expectedFrequency: "rare",
+        recommendedCallerAction: "retry after a delay",
+    },
+    {
+        faultClass: "rate-limited",
+        trigger: "Microsoft Graph throttling (HTTP 429)",
+        callerVisibleEffect: "operation fails, no side effect",
+        expectedFrequency: "under bursts",
+        recommendedCallerAction: "retry after the Retry-After delay",
+    },
+    ...extra,
+];
+
+const teamsNotFound = {
+    faultClass: "not-found",
+    trigger: "team or channel id wrong, or the signed-in user is not a member",
+    callerVisibleEffect: "operation fails, no side effect",
+    expectedFrequency: "caller error",
+    recommendedCallerAction: "check the ids via @doax/teams-list-team and @doax/teams-list-channel",
+};
+
+const teamsAccessDenied = {
+    faultClass: "access-denied",
+    trigger: "the signed-in user is not a member of the target team/channel (e.g. a private channel)",
+    callerVisibleEffect: "operation fails, no side effect",
+    expectedFrequency: "setup-time",
+    recommendedCallerAction: "join the team/channel or ask an owner to add the user",
 };
 
 const RESOURCES = [
@@ -202,6 +252,235 @@ const RESOURCES = [
                 sideEffectOnFailure: "none for all declared fault classes: Slack either posts or errors",
                 annualTarget: "best-effort",
                 latencyTarget: "execute completes in < 3s p95",
+            },
+        },
+    },
+    {
+        identity: "@doax/slack-search@1.0.0",
+        file: "slack-search.mjs",
+        manifest: {
+            kind: "data-source",
+            summary: "Full-text search of Slack messages the caller can see",
+            requiredScopes: ["search:read (user token only; bot tokens are rejected)"],
+            description:
+                "One collection: Slack messages matching a query, via search.messages. Read params: query (required), count (default 20), page (default 1; continuation is the next page number). Requires a Slack user token (xoxp-) — search.messages rejects bot tokens. The query interface the Registry leaves out (§5.4) is supplied by Slack's own search.",
+            owner: OWNER,
+            requiredTier: 3,
+            executionLocation: "caller-device",
+            authenticator: AUTHENTICATOR,
+            auditScope: ["metadata-read", "data-read"],
+            dependencies: [AUTHENTICATOR],
+            interfaceMapping: { describe: { kind: "native" }, metadata: { kind: "native" }, read: { kind: "native" } },
+            serviceLevel: {
+                expectedFaults: slackFaults(),
+                degradationBehavior: "fail fast; no partial pages are fabricated",
+                dependencyLevels: { [AUTHENTICATOR]: "per-attempt failure ~1%" },
+                measurement: "not measured",
+                supportCommitment: "none",
+                refreshCadence: "realtime",
+                tolerance: "none declared",
+                annualLatenessBudget: "best-effort (realtime source; lateness is Slack availability)",
+                latencyTarget: "read completes in < 3s p95 under normal Slack latency",
+            },
+        },
+    },
+    {
+        identity: TEAMS_AUTHENTICATOR,
+        file: "teams-login.mjs",
+        manifest: {
+            kind: "authenticator",
+            summary: "Log in to Microsoft Graph with the device-code OAuth flow",
+            description:
+                "Device-code authenticator for Microsoft Graph. The Executor CLI shows a user code and verification URL, the user signs in elsewhere, and the CLI polls until a delegated token is issued; refresh mode renews it silently (§7.6). Every Teams resource references this authenticator, so one login serves them all.",
+            owner: OWNER,
+            requiredTier: 3,
+            executionLocation: "caller-device",
+            subject: "personal",
+            auditScope: ["auth"],
+            dependencies: [],
+            interfaceMapping: { describe: { kind: "native" }, authenticate: { kind: "native" } },
+            authentication: {
+                targetSystem: "Microsoft Graph (https://graph.microsoft.com) via the Microsoft identity platform (https://login.microsoftonline.com)",
+                subject: "personal",
+                interactionKinds: ["device-code"],
+                interactionDetails: {
+                    "device-code": {
+                        instruction: "the CLI displays a short user code and a verification URL; sign in at the URL and enter the code",
+                        entryPoint: "https://microsoft.com/devicelogin (the exact verification_uri is returned at runtime)",
+                        completionSignal: "the token endpoint stops returning authorization_pending and yields an access_token",
+                        maxWait: "the device code's expires_in (~15 minutes)",
+                        docs: "https://learn.microsoft.com/entra/identity-platform/v2-oauth2-device-code",
+                    },
+                },
+                credentialMaterial: "OAuth 2.0 delegated bearer access token plus a refresh token",
+                lifetime: {
+                    period: "access token ~60-90 min",
+                    refreshable: true,
+                    refreshBehavior:
+                        "refresh mode exchanges the cached refresh token for a new access token with no user interaction; if it is expired or revoked, refresh fails and mode initial is required",
+                },
+                verificationMethod: "GET /me (no side effects)",
+                stepUpBehavior: "same as initial (repeat the device-code login)",
+                requiredInputs: [],
+                scopeRequested: "offline_access User.Read Team.ReadBasic.All Channel.ReadBasic.All ChannelMessage.Read.All ChannelMessage.Send",
+                revocation:
+                    "revoke the app's access at https://myaccount.microsoft.com (Privacy > Apps & services), or a tenant admin revokes it in Entra ID > Enterprise applications",
+            },
+            serviceLevel: {
+                expectedFaults: graphFaults(),
+                degradationBehavior: "fail fast; the caller is told which fault class occurred",
+                dependencyLevels: {},
+                measurement: "not measured",
+                supportCommitment: "none",
+                perAttemptFailureProbability: "unknown; declared assumption ~1%",
+            },
+        },
+    },
+    {
+        identity: "@doax/teams-list-team@1.0.0",
+        file: "teams-list-team.mjs",
+        manifest: {
+            kind: "data-source",
+            summary: "List the Microsoft Teams the caller has joined",
+            requiredScopes: ["Team.ReadBasic.All"],
+            description:
+                "One collection: the Teams the caller has joined, via GET /me/joinedTeams. The natural first read — its `id` field is the `team` parameter of the other Teams resources. Read params: cursor (an @odata.nextLink continuation).",
+            owner: OWNER,
+            requiredTier: 3,
+            executionLocation: "caller-device",
+            authenticator: TEAMS_AUTHENTICATOR,
+            auditScope: ["metadata-read", "data-read"],
+            dependencies: [TEAMS_AUTHENTICATOR],
+            interfaceMapping: { describe: { kind: "native" }, metadata: { kind: "native" }, read: { kind: "native" } },
+            serviceLevel: {
+                expectedFaults: graphFaults(),
+                degradationBehavior: "fail fast; no partial pages are fabricated",
+                dependencyLevels: { [TEAMS_AUTHENTICATOR]: "per-attempt failure ~1%" },
+                measurement: "not measured",
+                supportCommitment: "none",
+                refreshCadence: "realtime",
+                tolerance: "none declared",
+                annualLatenessBudget: "best-effort (realtime source; lateness is Graph availability)",
+                latencyTarget: "read completes in < 3s p95 under normal Graph latency",
+            },
+        },
+    },
+    {
+        identity: "@doax/teams-list-channel@1.0.0",
+        file: "teams-list-channel.mjs",
+        manifest: {
+            kind: "data-source",
+            summary: "List the channels of a Microsoft Team the caller can see",
+            requiredScopes: ["Channel.ReadBasic.All"],
+            description:
+                "One collection: the channels of one Team, via GET /teams/{team}/channels. Read params: team (required), membershipType (standard|private|shared, optional), cursor. Its `id` field is the `channel` parameter of teams-channel-messages and teams-post.",
+            owner: OWNER,
+            requiredTier: 3,
+            executionLocation: "caller-device",
+            authenticator: TEAMS_AUTHENTICATOR,
+            auditScope: ["metadata-read", "data-read"],
+            dependencies: [TEAMS_AUTHENTICATOR],
+            interfaceMapping: { describe: { kind: "native" }, metadata: { kind: "native" }, read: { kind: "native" } },
+            serviceLevel: {
+                expectedFaults: graphFaults([teamsNotFound, teamsAccessDenied]),
+                degradationBehavior: "fail fast; no partial pages are fabricated",
+                dependencyLevels: { [TEAMS_AUTHENTICATOR]: "per-attempt failure ~1%" },
+                measurement: "not measured",
+                supportCommitment: "none",
+                refreshCadence: "realtime",
+                tolerance: "none declared",
+                annualLatenessBudget: "best-effort (realtime source; lateness is Graph availability)",
+                latencyTarget: "read completes in < 3s p95 under normal Graph latency",
+            },
+        },
+    },
+    {
+        identity: "@doax/teams-channel-messages@1.0.0",
+        file: "teams-channel-messages.mjs",
+        manifest: {
+            kind: "data-source",
+            summary: "Read the messages of a Teams channel the caller can see",
+            requiredScopes: ["ChannelMessage.Read.All"],
+            description:
+                "One collection: top-level messages of one channel, via GET /teams/{team}/channels/{channel}/messages. Read params: team (required), channel (required), limit (default 20), cursor. Caller-relative (§5.3): you read exactly what your token and membership allow.",
+            owner: OWNER,
+            requiredTier: 3,
+            executionLocation: "caller-device",
+            authenticator: TEAMS_AUTHENTICATOR,
+            auditScope: ["metadata-read", "data-read"],
+            dependencies: [TEAMS_AUTHENTICATOR],
+            interfaceMapping: { describe: { kind: "native" }, metadata: { kind: "native" }, read: { kind: "native" } },
+            serviceLevel: {
+                expectedFaults: graphFaults([teamsNotFound, teamsAccessDenied]),
+                degradationBehavior: "fail fast; no partial pages are fabricated",
+                dependencyLevels: { [TEAMS_AUTHENTICATOR]: "per-attempt failure ~1%" },
+                measurement: "not measured",
+                supportCommitment: "none",
+                refreshCadence: "realtime",
+                tolerance: "none declared",
+                annualLatenessBudget: "best-effort (realtime source; lateness is Graph availability)",
+                latencyTarget: "read completes in < 3s p95 under normal Graph latency",
+            },
+        },
+    },
+    {
+        identity: "@doax/teams-post@1.0.0",
+        file: "teams-post.mjs",
+        manifest: {
+            kind: "action",
+            summary: "Post a message to a Teams channel as the signed-in user",
+            requiredScopes: ["ChannelMessage.Send"],
+            description:
+                "Posts one message via POST /teams/{team}/channels/{channel}/messages (or /messages/{id}/replies when replyToId is given). Params: team (required), channel (required), text (required), contentType (text|html, optional), replyToId (optional). Dry-run is predictive: it validates the token and echoes what would be sent without sending (§6.1).",
+            owner: OWNER,
+            requiredTier: 3,
+            executionLocation: "caller-device",
+            authenticator: TEAMS_AUTHENTICATOR,
+            auditScope: ["dry-run", "execute"],
+            dependencies: [TEAMS_AUTHENTICATOR],
+            interfaceMapping: { describe: { kind: "native" }, "dry-run": { kind: "native" }, execute: { kind: "native" } },
+            dryRunMode: "predictive",
+            idempotency: "non-idempotent",
+            recoveryAction: "none",
+            serviceLevel: {
+                expectedFaults: graphFaults([teamsNotFound, teamsAccessDenied]),
+                degradationBehavior: "fail fast; a failed attempt posts nothing",
+                dependencyLevels: { [TEAMS_AUTHENTICATOR]: "per-attempt failure ~1%" },
+                measurement: "not measured",
+                supportCommitment: "none",
+                perAttemptFailureProbability: "unknown; declared assumption ~2% (rate limits, membership errors)",
+                sideEffectOnFailure: "none for all declared fault classes: Graph either posts or errors",
+                annualTarget: "best-effort",
+                latencyTarget: "execute completes in < 3s p95",
+            },
+        },
+    },
+    {
+        identity: "@doax/teams-search@1.0.0",
+        file: "teams-search.mjs",
+        manifest: {
+            kind: "data-source",
+            summary: "Full-text search of Teams channel messages the caller can see",
+            requiredScopes: ["ChannelMessage.Read.All"],
+            description:
+                "One collection: Teams channel messages matching a query, via POST /search/query (entityTypes chatMessage). Read params: query (required), limit (default 20), from (offset; continuation is the next offset). Caller-relative (§5.3): results are limited to what the signed-in user can access. The query interface the Registry leaves out (§5.4) is supplied by Microsoft Search.",
+            owner: OWNER,
+            requiredTier: 3,
+            executionLocation: "caller-device",
+            authenticator: TEAMS_AUTHENTICATOR,
+            auditScope: ["metadata-read", "data-read"],
+            dependencies: [TEAMS_AUTHENTICATOR],
+            interfaceMapping: { describe: { kind: "native" }, metadata: { kind: "native" }, read: { kind: "native" } },
+            serviceLevel: {
+                expectedFaults: graphFaults(),
+                degradationBehavior: "fail fast; no partial pages are fabricated",
+                dependencyLevels: { [TEAMS_AUTHENTICATOR]: "per-attempt failure ~1%" },
+                measurement: "not measured",
+                supportCommitment: "none",
+                refreshCadence: "realtime",
+                tolerance: "none declared",
+                annualLatenessBudget: "best-effort (realtime source; lateness is Graph availability)",
+                latencyTarget: "read completes in < 3s p95 under normal Graph latency",
             },
         },
     },

@@ -27,7 +27,7 @@ import {
     writeToken,
 } from "./executor.ts";
 
-export const VERSION = "0.2.0";
+export const VERSION = "0.3.0";
 
 const USAGE = `doax ${VERSION} — Executor CLI for the doax registry
 
