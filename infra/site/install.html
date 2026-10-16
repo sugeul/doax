@@ -75,7 +75,7 @@
     </p>
 
     <h2>Requirements</h2>
-    <p>Linux or macOS with <a href="https://nodejs.org" rel="noopener">Node.js</a> ≥ 20 and <code>curl</code>. Nothing else — the CLI is a single self-contained file.</p>
+    <p>Linux, macOS or Windows with <a href="https://nodejs.org" rel="noopener">Node.js</a> ≥ 20 (plus <code>curl</code> on Linux/macOS). Nothing else — the CLI is a single self-contained file.</p>
 
     <h2>Install</h2>
     <pre><span class="p">$</span> curl -fsSL https://doax.io/install.sh | bash</pre>
@@ -83,6 +83,10 @@
     <p>Prefer to read before you run? <a href="/install.sh">View install.sh</a>. Manual equivalent:</p>
     <pre><span class="p">$</span> curl -fsSL https://doax.io/cli/doax.mjs -o ~/.doax/lib/doax.mjs
 <span class="p">$</span> node ~/.doax/lib/doax.mjs --version</pre>
+
+    <h3>Windows (PowerShell)</h3>
+    <pre><span class="p">PS&gt;</span> irm https://doax.io/install.ps1 | iex</pre>
+    <p>The script downloads <code>doax.mjs</code> into <code>~\.doax\lib\</code>, puts the <a href="/doax.ps1">doax.ps1</a> launcher and a <code>doax.cmd</code> (for cmd.exe) in <code>~\.doax\bin</code> (override with <code>DOAX_BIN</code>), and adds that folder to your user <code>PATH</code>. If your execution policy blocks scripts, run <code>Set-ExecutionPolicy -Scope CurrentUser RemoteSigned</code> or use <code>doax.cmd</code>. <a href="/install.ps1">View install.ps1</a>.</p>
 
     <h2>Verify</h2>
     <pre><span class="p">$</span> doax status
@@ -137,7 +141,8 @@
     <p>Unrouted namespaces use the default registry (<code>doax registry add default &lt;url&gt;</code>, or <code>DOAX_REGISTRY</code>). Audit events for a resource are delivered to the registry it came from, so a company's own usage lands in its own audit log.</p>
 
     <h2>Uninstall</h2>
-    <pre><span class="p">$</span> rm -rf ~/.doax ~/.local/bin/doax</pre>
+    <pre><span class="p">$</span> rm -rf ~/.doax ~/.local/bin/doax
+<span class="p">PS&gt;</span> Remove-Item -Recurse -Force ~\.doax   <span class="c"># Windows; also drop ~\.doax\bin from your user PATH</span></pre>
     <p><code>~/.doax</code> also holds your cached credentials and the package cache; removing it removes them.</p>
 
     <footer>

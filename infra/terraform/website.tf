@@ -52,6 +52,26 @@ resource "aws_s3_object" "install_sh" {
   cache_control = "public, max-age=300"
 }
 
+# The Windows installer: irm https://doax.io/install.ps1 | iex
+resource "aws_s3_object" "install_ps1" {
+  bucket        = aws_s3_bucket.site.id
+  key           = "install.ps1"
+  source        = "${path.module}/build/site/install.ps1"
+  etag          = filemd5("${path.module}/build/site/install.ps1")
+  content_type  = "text/plain; charset=utf-8"
+  cache_control = "public, max-age=300"
+}
+
+# The Windows launcher that install.ps1 downloads into ~\.doax\bin
+resource "aws_s3_object" "doax_ps1" {
+  bucket        = aws_s3_bucket.site.id
+  key           = "doax.ps1"
+  source        = "${path.module}/build/site/doax.ps1"
+  etag          = filemd5("${path.module}/build/site/doax.ps1")
+  content_type  = "text/plain; charset=utf-8"
+  cache_control = "public, max-age=300"
+}
+
 # The CLI itself: one self-contained ESM bundle (Node >= 20)
 resource "aws_s3_object" "cli_bundle" {
   bucket        = aws_s3_bucket.site.id

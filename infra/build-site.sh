@@ -2,7 +2,9 @@
 # Builds everything the doax.io website bucket serves:
 #   index.html   — the landing page (infra/site/doax-site.html wrapped in a document shell)
 #   install.html — the CLI install guide (served at /install)
-#   install.sh   — the one-liner installer
+#   install.sh   — the one-liner installer (Linux/macOS)
+#   install.ps1  — the one-liner installer (Windows PowerShell)
+#   doax.ps1     — the Windows launcher install.ps1 puts on PATH
 #   cli/doax.mjs — the CLI as one self-contained ESM bundle (Node >= 20)
 set -euo pipefail
 
@@ -18,6 +20,8 @@ mkdir -p "$OUT/cli"
 
 cp "$ROOT/infra/site/install.html" "$OUT/install.html"
 cp "$ROOT/infra/site/install.sh" "$OUT/install.sh"
+cp "$ROOT/infra/site/install.ps1" "$OUT/install.ps1"
+cp "$ROOT/infra/site/doax.ps1" "$OUT/doax.ps1"
 
 cd "$ROOT"
 pnpm -w exec esbuild "$ROOT/apps/doax-cli/src/main.ts" \
