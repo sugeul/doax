@@ -10,6 +10,10 @@ data "aws_secretsmanager_secret" "drive" {
   name = "doax-adapter-google-drive"
 }
 
+data "aws_secretsmanager_secret" "onedrive" {
+  name = "doax-adapter-onedrive"
+}
+
 resource "aws_iam_role" "drive_auth" {
   name = "${local.name}-drive-auth-lambda"
   assume_role_policy = jsonencode({
@@ -36,7 +40,7 @@ resource "aws_iam_role_policy" "drive_auth_secret" {
     Statement = [{
       Effect   = "Allow"
       Action   = ["secretsmanager:GetSecretValue"]
-      Resource = data.aws_secretsmanager_secret.drive.arn
+      Resource = [data.aws_secretsmanager_secret.drive.arn, data.aws_secretsmanager_secret.onedrive.arn]
     }]
   })
 }

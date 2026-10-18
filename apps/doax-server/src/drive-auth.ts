@@ -4,25 +4,54 @@ import { handle } from "hono/aws-lambda";
 import { GetSecretValueCommand, SecretsManagerClient } from "@aws-sdk/client-secrets-manager";
 
 /**
-  * auth.doax.io — the Google Drive refresh-token mirror. A tiny, isolated service that exists
-  * only to run the OAuth consent-redirect once and hand the caller back a refresh token to paste
-  * into @doax/google-drive-login (CLI) or their .env.
+  * auth.doax.io — the OAuth refresh-token mirror. A tiny, isolated service that runs an OAuth
+  * consent-redirect once and hands the caller back a refresh token to paste into a @doax/*-login
+  * authenticator (CLI) or their .env.
   *
   * It is a SEPARATE, non-VPC Lambda: the registry Lambda is VPC-attached with no public egress
-  * (infra/terraform/vpc_endpoints.tf), so it cannot reach accounts.google.com. This one can.
+  * (infra/terraform/vpc_endpoints.tf), so it cannot reach the providers' OAuth endpoints. This can.
   *
-  * One route, served at https://auth.doax.io/ (the registered OAuth redirect_uri):
-  *   GET /                   -> set a state cookie, 302 to Google's consent screen
-  *   GET /?code=...&state=.. -> verify state, exchange the code, render the token page
-  *   GET /?error=...         -> render the error page (user declined, etc.)
+  * Provider-aware, keyed by ?appid=@ns/name (see PROVIDERS). One page serves Google Drive and
+  * OneDrive today; add a provider by adding its secret + a PROVIDERS entry. Served at
+  * https://auth.doax.io/ (the registered redirect_uri):
+  *   GET /?appid=..            -> set a state cookie, 302 to the provider's consent screen
+  *   GET /?code=...&state=..   -> verify state, exchange the code, render the token page
+  *   GET /?error=...           -> render the error page (user declined, etc.)
   *
-  * The OAuth client (client_id/client_secret) is read from AWS Secrets Manager at runtime.
+  * Each provider's OAuth client (client_id/client_secret) is read from AWS Secrets Manager at runtime.
   */
 
-const SECRET_ID = process.env.DRIVE_SECRET_ID ?? "doax-adapter-google-drive";
 const REGION = process.env.DRIVE_SECRET_REGION ?? process.env.AWS_REGION ?? "ap-northeast-2";
 const REDIRECT_URI = process.env.DRIVE_REDIRECT_URI ?? "https://auth.doax.io";
-const SCOPE = process.env.DRIVE_SCOPE ?? "https://www.googleapis.com/auth/drive.readonly";
+
+interface Provider {
+    secretId: string;
+    scope: string;
+    /** Provider-specific authorize params beyond the OAuth basics. */
+    authParams: Record<string, string>;
+    /** A no-side-effect call that names the connected account for the success page. */
+    verifyUrl: string;
+    verifyAccount: (body: Record<string, unknown>) => string | null;
+}
+
+const PROVIDERS: Record<string, Provider> = {
+    "@doax/google-drive-login": {
+        secretId: "doax-adapter-google-drive",
+        scope: "https://www.googleapis.com/auth/drive.readonly",
+        authParams: { access_type: "offline", prompt: "consent", include_granted_scopes: "true" },
+        verifyUrl: "https://www.googleapis.com/drive/v3/about?fields=user",
+        verifyAccount: (b) => ((b.user as { emailAddress?: string })?.emailAddress ?? null),
+    },
+    "@doax/onedrive-login": {
+        secretId: "doax-adapter-onedrive",
+        scope: "offline_access Files.Read User.Read",
+        authParams: { prompt: "consent" },
+        verifyUrl: "https://graph.microsoft.com/v1.0/me",
+        verifyAccount: (b) => ((b.userPrincipalName as string) ?? (b.mail as string) ?? null),
+    },
+};
+
+const DEFAULT_APPID = "@doax/google-drive-login";
 
 interface OAuthClient {
     clientId: string;
@@ -32,26 +61,31 @@ interface OAuthClient {
 }
 
 const sm = new SecretsManagerClient({ region: REGION });
-let clientCache: Promise<OAuthClient> | null = null;
+const clientCache = new Map<string, Promise<OAuthClient>>();
 
-/** Read and memoize the OAuth client from Secrets Manager (the `web` block of the Google JSON). */
-function loadClient(): Promise<OAuthClient> {
-    clientCache ??= (async () => {
-        const out = await sm.send(new GetSecretValueCommand({ SecretId: SECRET_ID }));
-        const parsed = JSON.parse(out.SecretString ?? "{}") as { web?: Record<string, string>; installed?: Record<string, string> };
-        const web = parsed.web ?? parsed.installed ?? (parsed as Record<string, string>);
-        if (!web.client_id || !web.client_secret) throw new Error("the Drive OAuth secret has no client_id/client_secret");
-        return {
-            clientId: web.client_id,
-            clientSecret: web.client_secret,
-            authUri: web.auth_uri ?? "https://accounts.google.com/o/oauth2/auth",
-            tokenUri: web.token_uri ?? "https://oauth2.googleapis.com/token",
-        };
-    })().catch((error) => {
-        clientCache = null; // let the next request retry a transient failure
-        throw error;
-    });
-    return clientCache;
+/** Read and memoize a provider's OAuth client from Secrets Manager (the `web` block). */
+function loadClient(secretId: string): Promise<OAuthClient> {
+    let cached = clientCache.get(secretId);
+    if (!cached) {
+        cached = (async () => {
+            const out = await sm.send(new GetSecretValueCommand({ SecretId: secretId }));
+            const parsed = JSON.parse(out.SecretString ?? "{}") as { web?: Record<string, string>; installed?: Record<string, string> };
+            const web = parsed.web ?? parsed.installed ?? (parsed as Record<string, string>);
+            if (!web.client_id || !web.client_secret) throw new Error(`${secretId}: no client_id/client_secret`);
+            const tenant = web.tenant ?? "common";
+            return {
+                clientId: web.client_id,
+                clientSecret: web.client_secret,
+                authUri: web.auth_uri ?? `https://login.microsoftonline.com/${tenant}/oauth2/v2.0/authorize`,
+                tokenUri: web.token_uri ?? `https://login.microsoftonline.com/${tenant}/oauth2/v2.0/token`,
+            };
+        })().catch((error) => {
+            clientCache.delete(secretId); // let the next request retry a transient failure
+            throw error;
+        });
+        clientCache.set(secretId, cached);
+    }
+    return cached;
 }
 
 /* ---------- doax design language (shared with the registry sign-in page) ---------- */
@@ -84,21 +118,21 @@ code{font:12.5px ui-monospace,SFMono-Regular,Menlo,monospace;background:#0f1828;
 }
 
 function errorPage(heading: string, detail: string): string {
-    return page("Drive connect", `<h1><span class="ring"></span>${esc(heading)}</h1>
+    return page("Connect", `<h1><span class="ring"></span>${esc(heading)}</h1>
 <p class="err">${esc(detail)}</p>
 <div class="row"><a class="btn" href="${esc(REDIRECT_URI)}">Try again</a></div>`);
 }
 
-function tokenPage(refreshToken: string, scope: string, email: string | null, appid: string): string {
-    return page("Drive connected", `<h1><span class="ring"></span>Drive connected${email ? ` · ${esc(email)}` : ""}</h1>
+function tokenPage(refreshToken: string, scope: string, account: string | null, appid: string): string {
+    return page("Connected", `<h1><span class="ring"></span>Connected${account ? ` · ${esc(account)}` : ""}</h1>
 <p>Copy this refresh token into <code>${esc(appid)}</code> — the CLI or your doax app. It is shown <strong>once</strong> — treat it like a password.</p>
 <label for="tok">Refresh token${scope ? ` · ${esc(scope)}` : ""}</label>
 <textarea id="tok" readonly onclick="this.select()">${esc(refreshToken)}</textarea>
 <div class="row"><button onclick="copyTok()">Copy token</button><span id="copied" class="ok" style="font-size:13px"></span></div>
 <div class="hint">Use it either way:</div>
 <span class="pre">doax auth set ${esc(appid)} --secret &lt;token&gt;</span>
-<span class="pre">GOOGLE_DRIVE_REFRESH_TOKEN=&lt;token&gt;   # in your .env</span>
-<p class="warn" style="font-size:12.5px">If you lose it, revoke at <code>myaccount.google.com/permissions</code> and reconnect here.</p>
+<span class="pre">REFRESH_TOKEN=&lt;token&gt;   # in your .env</span>
+<p class="warn" style="font-size:12.5px">If you lose it, revoke the app's access with your provider and reconnect here.</p>
 <script>
 function copyTok(){var t=document.getElementById("tok");t.select();
 navigator.clipboard.writeText(t.value).then(function(){document.getElementById("copied").textContent="copied";},
@@ -109,9 +143,6 @@ function(){document.execCommand("copy");document.getElementById("copied").textCo
 /* ---------- state cookie (double-submit CSRF guard, carries the requesting appid) ---------- */
 
 const STATE_COOKIE = "drive_oauth";
-// A resource reference: @namespace/name. Appears in the token-page instructions, so it is validated.
-const APPID_RE = /^@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*$/;
-const DEFAULT_APPID = "@doax/google-drive-login";
 
 /** Google echoes only `state`, so the appid rides back in the cookie as `<nonce>|<appid>`. */
 function stateCookie(nonce: string, appid: string, maxAge: number): string {
@@ -127,8 +158,10 @@ function readCookie(header: string | undefined, name: string): string | null {
     return null;
 }
 
-function cleanAppid(raw: string | undefined): string {
-    return raw && APPID_RE.test(raw) ? raw : DEFAULT_APPID;
+/** Resolve a requested appid to a known provider; null appid defaults, unknown appid is rejected. */
+function resolveAppid(raw: string | undefined): string | null {
+    if (!raw) return DEFAULT_APPID;
+    return PROVIDERS[raw] ? raw : null;
 }
 
 function noncesMatch(a: string | null, b: string | null): boolean {
@@ -136,7 +169,7 @@ function noncesMatch(a: string | null, b: string | null): boolean {
     return timingSafeEqual(Buffer.from(a), Buffer.from(b));
 }
 
-/* ---------- Google OAuth exchange ---------- */
+/* ---------- OAuth exchange ---------- */
 
 async function exchangeCode(client: OAuthClient, code: string): Promise<{ refresh_token?: string; scope?: string; access_token?: string; error?: string }> {
     const res = await fetch(client.tokenUri, {
@@ -153,13 +186,13 @@ async function exchangeCode(client: OAuthClient, code: string): Promise<{ refres
     return (await res.json().catch(() => ({}))) as Record<string, string>;
 }
 
-/** Best-effort: whose Drive did we just connect? Never fatal. */
-async function whoami(accessToken: string | undefined): Promise<string | null> {
+/** Best-effort: which account did we just connect? Never fatal. */
+async function whoami(provider: Provider, accessToken: string | undefined): Promise<string | null> {
     if (!accessToken) return null;
     try {
-        const res = await fetch("https://www.googleapis.com/drive/v3/about?fields=user", { headers: { authorization: `Bearer ${accessToken}` } });
-        const body = (await res.json().catch(() => ({}))) as { user?: { emailAddress?: string } };
-        return body.user?.emailAddress ?? null;
+        const res = await fetch(provider.verifyUrl, { headers: { authorization: `Bearer ${accessToken}` } });
+        const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+        return provider.verifyAccount(body);
     } catch {
         return null;
     }
@@ -169,30 +202,29 @@ const app = new Hono();
 
 app.get("/", async (c) => {
     const error = c.req.query("error");
-    if (error) return c.html(errorPage("Authorization was not completed", `Google returned: ${error}`), 400);
-
-    let client: OAuthClient;
-    try {
-        client = await loadClient();
-    } catch (e) {
-        return c.html(errorPage("Service not configured", (e as Error).message), 500);
-    }
+    if (error) return c.html(errorPage("Authorization was not completed", `Provider returned: ${error}`), 400);
 
     const code = c.req.query("code");
     if (!code) {
-        // Start the flow: random nonce + the requesting appid in a cookie, redirect to Google.
+        // Start the flow: resolve the provider, random nonce + appid in a cookie, redirect to consent.
+        const appid = resolveAppid(c.req.query("appid"));
+        if (!appid) return c.html(errorPage("Unknown app", `No connector is configured for appid "${c.req.query("appid")}".`), 400);
+        const provider = PROVIDERS[appid]!;
+        let client: OAuthClient;
+        try {
+            client = await loadClient(provider.secretId);
+        } catch (e) {
+            return c.html(errorPage("Service not configured", (e as Error).message), 500);
+        }
         const nonce = randomBytes(16).toString("hex");
-        const appid = cleanAppid(c.req.query("appid"));
         c.header("set-cookie", stateCookie(nonce, appid, 600));
         const url = `${client.authUri}?${new URLSearchParams({
             client_id: client.clientId,
             redirect_uri: REDIRECT_URI,
             response_type: "code",
-            scope: SCOPE,
-            access_type: "offline",
-            prompt: "consent", // force a refresh_token even on re-consent
-            include_granted_scopes: "true",
+            scope: provider.scope,
             state: nonce,
+            ...provider.authParams,
         })}`;
         return c.redirect(url, 302);
     }
@@ -202,21 +234,30 @@ app.get("/", async (c) => {
     if (!noncesMatch(c.req.query("state") ?? null, nonce ?? null)) {
         return c.html(errorPage("Session expired", "The sign-in state did not match. Start again."), 400);
     }
-    const appid = cleanAppid(appidFromCookie);
+    const appid = resolveAppid(appidFromCookie);
+    const provider = appid ? PROVIDERS[appid] : undefined;
+    if (!appid || !provider) return c.html(errorPage("Unknown app", "The connector is no longer configured."), 400);
     c.header("set-cookie", stateCookie("", "", 0)); // clear it
+
+    let client: OAuthClient;
+    try {
+        client = await loadClient(provider.secretId);
+    } catch (e) {
+        return c.html(errorPage("Service not configured", (e as Error).message), 500);
+    }
 
     const tok = await exchangeCode(client, code);
     if (!tok.refresh_token) {
         const why = tok.error
-            ? `Google returned: ${tok.error}`
-            : "No refresh token was returned. Remove this app at myaccount.google.com/permissions, then connect again.";
+            ? `Provider returned: ${tok.error}`
+            : "No refresh token was returned. Remove this app in your provider's account settings, then connect again.";
         return c.html(errorPage("Could not mint a refresh token", why), 400);
     }
-    const email = await whoami(tok.access_token);
-    return c.html(tokenPage(tok.refresh_token, tok.scope ?? SCOPE, email, appid));
+    const account = await whoami(provider, tok.access_token);
+    return c.html(tokenPage(tok.refresh_token, tok.scope ?? provider.scope, account, appid));
 });
 
-app.get("/healthz", (c) => c.json({ status: "ok", surface: "drive-auth" }));
+app.get("/healthz", (c) => c.json({ status: "ok", surface: "oauth-mirror", providers: Object.keys(PROVIDERS) }));
 app.notFound((c) => c.redirect(REDIRECT_URI, 302));
 
 export const handler = handle(app);

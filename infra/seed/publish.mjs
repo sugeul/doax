@@ -21,6 +21,7 @@ const OWNER = "doax.io operators <registry@doax.io>";
 const AUTHENTICATOR = "@doax/slack-login@1.0.0";
 const TEAMS_AUTHENTICATOR = "@doax/teams-login@1.0.0";
 const DRIVE_AUTHENTICATOR = "@doax/google-drive-login@1.0.0";
+const ONEDRIVE_AUTHENTICATOR = "@doax/onedrive-login@1.0.0";
 
 const slackFaults = (extra = []) => [
     {
@@ -165,6 +166,14 @@ const driveContentTooLarge = {
     callerVisibleEffect: "operation fails, no side effect; no content is returned",
     expectedFrequency: "large files only",
     recommendedCallerAction: "omit media to read metadata only, or fetch the file via its webContentLink outside this adapter",
+};
+
+const onedriveNotFound = {
+    faultClass: "not-found",
+    trigger: "the item id, drive id, or delta token is wrong, expired, or not visible to the caller",
+    callerVisibleEffect: "operation fails, no side effect",
+    expectedFrequency: "caller error / expired delta token",
+    recommendedCallerAction: "check the id via @doax/onedrive-list; for changes, read with no cursor to resync a fresh baseline",
 };
 
 const RESOURCES = [
@@ -672,6 +681,141 @@ const RESOURCES = [
                 tolerance: "none declared",
                 annualLatenessBudget: "best-effort (realtime source; lateness is Drive availability)",
                 latencyTarget: "read completes in < 2s p95 under normal Drive latency",
+            },
+        },
+    },
+    {
+        identity: ONEDRIVE_AUTHENTICATOR,
+        file: "onedrive-login.mjs",
+        manifest: {
+            kind: "authenticator",
+            summary: "Log in to OneDrive (Microsoft Graph) with an OAuth refresh token",
+            description:
+                "Secret-entry authenticator for OneDrive via Microsoft Graph. The caller mints a refresh token once at https://auth.doax.io?appid=@doax/onedrive-login (the consent-redirect mirror) and pastes it here; this module exchanges it for a short-lived access token using the OAuth client it reads from AWS Secrets Manager via the local aws-cli. refresh mode re-mints the access token silently (§7.6). Every @doax/onedrive-* resource references this authenticator, so one login serves them all.",
+            owner: OWNER,
+            requiredTier: 3,
+            executionLocation: "caller-device",
+            subject: "personal",
+            auditScope: ["auth"],
+            dependencies: [],
+            interfaceMapping: { describe: { kind: "native" }, authenticate: { kind: "native" } },
+            authentication: {
+                targetSystem: "OneDrive via Microsoft Graph (https://graph.microsoft.com) through the Microsoft identity platform (https://login.microsoftonline.com)",
+                subject: "personal",
+                interactionKinds: ["secret-entry"],
+                interactionDetails: {
+                    "secret-entry": {
+                        instruction: "paste the Microsoft OAuth refresh token minted at https://auth.doax.io?appid=@doax/onedrive-login; it is exchanged for an access token and verified via GET /me",
+                        entryPoint: "https://auth.doax.io?appid=@doax/onedrive-login — authorize the OneDrive app, then copy the refresh token shown",
+                        docs: "https://learn.microsoft.com/graph/auth-v2-user",
+                    },
+                },
+                credentialMaterial: "OAuth 2.0 access token minted from the pasted refresh token",
+                lifetime: {
+                    period: "access token ~60-90 min",
+                    refreshable: true,
+                    refreshBehavior: "refresh mode re-exchanges the cached refresh token (Microsoft may rotate it; the newest is kept); if it is revoked or expired, a new refresh token must be minted at https://auth.doax.io?appid=@doax/onedrive-login",
+                },
+                verificationMethod: "GET /me (no side effects)",
+                stepUpBehavior: "same as initial (re-paste the refresh token)",
+                requiredInputs: ["secret"],
+                scopeRequested: "whatever the pasted refresh token already carries (expected: offline_access Files.Read User.Read); this flow requests no new scopes",
+                revocation: "revoke the app's access at https://account.live.com/consent/Manage (personal) or via your tenant's Entra ID (work/school)",
+            },
+            serviceLevel: {
+                expectedFaults: graphFaults(),
+                degradationBehavior: "fail fast; the caller is told which fault class occurred",
+                dependencyLevels: {},
+                measurement: "not measured",
+                supportCommitment: "none",
+                perAttemptFailureProbability: "unknown; declared assumption ~1%",
+            },
+        },
+    },
+    {
+        identity: "@doax/onedrive-list@1.0.0",
+        file: "onedrive-list.mjs",
+        manifest: {
+            kind: "data-source",
+            summary: "List the items in one OneDrive folder the caller can see",
+            requiredScopes: ["Files.Read"],
+            description:
+                "One collection: items (files and folders) in one OneDrive folder, via GET /me/drive/root/children (or /items/{id}/children). Read params: itemId (folder; omit for root), driveId (omit for the caller's own OneDrive), top (default 100), orderBy, cursor (an @odata.nextLink). A folder's `id` is the `itemId` of this resource; any item's `id` is the `itemId` of @doax/onedrive-get.",
+            owner: OWNER,
+            requiredTier: 3,
+            executionLocation: "caller-device",
+            authenticator: ONEDRIVE_AUTHENTICATOR,
+            auditScope: ["metadata-read", "data-read"],
+            dependencies: [ONEDRIVE_AUTHENTICATOR],
+            interfaceMapping: { describe: { kind: "native" }, metadata: { kind: "native" }, read: { kind: "native" } },
+            serviceLevel: {
+                expectedFaults: graphFaults([onedriveNotFound]),
+                degradationBehavior: "fail fast; no partial pages are fabricated",
+                dependencyLevels: { [ONEDRIVE_AUTHENTICATOR]: "per-attempt failure ~1%" },
+                measurement: "not measured",
+                supportCommitment: "none",
+                refreshCadence: "realtime",
+                tolerance: "none declared",
+                annualLatenessBudget: "best-effort (realtime source; lateness is Graph availability)",
+                latencyTarget: "read completes in < 3s p95 under normal Graph latency",
+            },
+        },
+    },
+    {
+        identity: "@doax/onedrive-changes@1.0.0",
+        file: "onedrive-changes.mjs",
+        manifest: {
+            kind: "data-source",
+            summary: "Read the change feed (delta) for the caller's OneDrive",
+            requiredScopes: ["Files.Read"],
+            description:
+                "One collection: the OneDrive change feed, via GET /me/drive/root/delta. With no cursor, read() establishes a baseline (delta?token=latest) and returns the deltaLink to poll from; thereafter the caller polls with the `nextDeltaToken` the read returns. Read params: cursor, driveId, top. The read returns both `continuation` (more pages now) and `nextDeltaToken` (poll again later).",
+            owner: OWNER,
+            requiredTier: 3,
+            executionLocation: "caller-device",
+            authenticator: ONEDRIVE_AUTHENTICATOR,
+            auditScope: ["metadata-read", "data-read"],
+            dependencies: [ONEDRIVE_AUTHENTICATOR],
+            interfaceMapping: { describe: { kind: "native" }, metadata: { kind: "native" }, read: { kind: "native" } },
+            serviceLevel: {
+                expectedFaults: graphFaults([onedriveNotFound]),
+                degradationBehavior: "fail fast; no partial pages are fabricated",
+                dependencyLevels: { [ONEDRIVE_AUTHENTICATOR]: "per-attempt failure ~1%" },
+                measurement: "not measured",
+                supportCommitment: "none",
+                refreshCadence: "realtime",
+                tolerance: "none declared",
+                annualLatenessBudget: "best-effort (realtime source; lateness is Graph availability)",
+                latencyTarget: "read completes in < 3s p95 under normal Graph latency",
+            },
+        },
+    },
+    {
+        identity: "@doax/onedrive-get@1.0.0",
+        file: "onedrive-get.mjs",
+        manifest: {
+            kind: "data-source",
+            summary: "Read a single OneDrive item's metadata (and optionally its content)",
+            requiredScopes: ["Files.Read"],
+            description:
+                "One collection of one record: a single OneDrive item, via GET /me/drive/items/{itemId}. Read params: itemId (required), driveId (omit for the caller's own OneDrive), media (optional — when true, also returns the bytes as base64 in `content`, <=10MB; not valid for folders). The itemId comes from @doax/onedrive-list (its `id`) or @doax/onedrive-changes (its `id`).",
+            owner: OWNER,
+            requiredTier: 3,
+            executionLocation: "caller-device",
+            authenticator: ONEDRIVE_AUTHENTICATOR,
+            auditScope: ["metadata-read", "data-read"],
+            dependencies: [ONEDRIVE_AUTHENTICATOR],
+            interfaceMapping: { describe: { kind: "native" }, metadata: { kind: "native" }, read: { kind: "native" } },
+            serviceLevel: {
+                expectedFaults: graphFaults([onedriveNotFound, driveContentTooLarge]),
+                degradationBehavior: "fail fast; a missing or invisible item is a not-found fault",
+                dependencyLevels: { [ONEDRIVE_AUTHENTICATOR]: "per-attempt failure ~1%" },
+                measurement: "not measured",
+                supportCommitment: "none",
+                refreshCadence: "realtime",
+                tolerance: "none declared",
+                annualLatenessBudget: "best-effort (realtime source; lateness is Graph availability)",
+                latencyTarget: "read completes in < 2s p95 under normal Graph latency",
             },
         },
     },
