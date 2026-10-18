@@ -159,6 +159,14 @@ const driveNotFound = {
     recommendedCallerAction: "check the id via @doax/google-drive-list; for changes, read with no cursor to get a fresh baseline token",
 };
 
+const driveContentTooLarge = {
+    faultClass: "content-too-large",
+    trigger: "media was requested but the file's bytes exceed the 10MB base64 cap (or Google's export limit)",
+    callerVisibleEffect: "operation fails, no side effect; no content is returned",
+    expectedFrequency: "large files only",
+    recommendedCallerAction: "omit media to read metadata only, or fetch the file via its webContentLink outside this adapter",
+};
+
 const RESOURCES = [
     {
         identity: AUTHENTICATOR,
@@ -643,10 +651,10 @@ const RESOURCES = [
         file: "google-drive-get.mjs",
         manifest: {
             kind: "data-source",
-            summary: "Read the metadata of a single Google Drive file",
+            summary: "Read a single Google Drive file's metadata (and optionally its content)",
             requiredScopes: ["https://www.googleapis.com/auth/drive.readonly"],
             description:
-                "One collection of one record: the metadata of a single Drive file, via GET /drive/v3/files/{fileId}. Read params: fileId (required), fields (optional override). The fileId comes from @doax/google-drive-list (its `id`) or @doax/google-drive-changes (its `fileId`).",
+                "One collection of one record: a single Drive file, via GET /drive/v3/files/{fileId}. Read params: fileId (required), fields (optional override), media (optional — when true, also returns the bytes as base64 in `content`, <=10MB; Google-native files are exported, with exportMimeType overriding the per-type default). The fileId comes from @doax/google-drive-list (its `id`) or @doax/google-drive-changes (its `fileId`).",
             owner: OWNER,
             requiredTier: 3,
             executionLocation: "caller-device",
@@ -655,7 +663,7 @@ const RESOURCES = [
             dependencies: [DRIVE_AUTHENTICATOR],
             interfaceMapping: { describe: { kind: "native" }, metadata: { kind: "native" }, read: { kind: "native" } },
             serviceLevel: {
-                expectedFaults: driveFaults([driveNotFound]),
+                expectedFaults: driveFaults([driveNotFound, driveContentTooLarge]),
                 degradationBehavior: "fail fast; a missing or invisible file is a not-found fault",
                 dependencyLevels: { [DRIVE_AUTHENTICATOR]: "per-attempt failure ~1%" },
                 measurement: "not measured",

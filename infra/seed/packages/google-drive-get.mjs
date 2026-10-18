@@ -7,6 +7,16 @@
 
 const DRIVE = "https://www.googleapis.com/drive/v3";
 const FILE_FIELDS = "id,name,mimeType,description,modifiedTime,createdTime,size,parents,trashed,starred,shared,webViewLink,webContentLink,iconLink,md5Checksum,owners(displayName,emailAddress),lastModifyingUser(displayName,emailAddress),driveId";
+// media:true returns the bytes as base64 in the record. Caps payload size (base64-in-JSON is
+// fine for documents and small files, not for large binaries). Google's export is also <=10MB.
+const MAX_CONTENT_BYTES = 10 * 1024 * 1024;
+// Default export target per Google-native type (overridable with exportMimeType). null = not downloadable.
+const EXPORT_DEFAULTS = {
+    "application/vnd.google-apps.document": "text/plain",
+    "application/vnd.google-apps.spreadsheet": "text/csv",
+    "application/vnd.google-apps.presentation": "application/pdf",
+    "application/vnd.google-apps.drawing": "image/png",
+};
 
 function driveFault(status, body, retryAfter) {
     const err = body?.error;
@@ -52,6 +62,27 @@ async function drive(path, token, params) {
     return body;
 }
 
+/** Drive GET returning raw bytes (alt=media download, or /export); errors carry a JSON body. */
+async function driveMedia(path, token, params) {
+    const query = new URLSearchParams();
+    for (const [key, value] of Object.entries(params ?? {})) if (value !== undefined && value !== null && value !== "") query.set(key, String(value));
+    let res;
+    try {
+        res = await fetch(`${DRIVE}${path}?${query}`, { headers: { authorization: `Bearer ${token}` } });
+    } catch {
+        throw Object.assign(new Error("drive-unavailable: network failure reaching Google Drive"), { faultClass: "drive-unavailable" });
+    }
+    if (!res.ok) throw driveFault(res.status, await res.json().catch(() => ({})), res.headers.get("retry-after"));
+    const buffer = Buffer.from(await res.arrayBuffer());
+    if (buffer.length > MAX_CONTENT_BYTES) {
+        throw Object.assign(new Error(`content-too-large: ${buffer.length} bytes exceeds the ${MAX_CONTENT_BYTES}-byte cap`), {
+            faultClass: "content-too-large",
+            detail: { fix: "omit media to read metadata only, or fetch the file via webContentLink outside this adapter" },
+        });
+    }
+    return { buffer, contentType: res.headers.get("content-type") };
+}
+
 const RECORD_SCHEMA = {
     type: "object",
     properties: {
@@ -72,6 +103,10 @@ const RECORD_SCHEMA = {
         owners: { type: "array" },
         lastModifyingUser: { type: ["object", "null"] },
         driveId: { type: ["string", "null"] },
+        content: { type: ["string", "null"], description: "base64 file bytes when media:true was requested, else null" },
+        contentEncoding: { type: ["string", "null"], description: "base64 when content is present" },
+        contentMimeType: { type: ["string", "null"], description: "the mime type of the returned content (the export type for Google-native files)" },
+        contentBytes: { type: ["integer", "null"], description: "decoded byte length of content" },
     },
     required: ["id", "name", "mimeType"],
 };
@@ -84,6 +119,8 @@ export function describe() {
         readParams: {
             fileId: "the Drive file id (required)",
             fields: "override the field selection (a Drive files.get `fields` list)",
+            media: "when true, also return the file bytes as base64 in `content` (<=10MB)",
+            exportMimeType: "for Google-native files (Docs/Sheets/Slides), the export target mime type; defaults by type",
         },
     };
 }
@@ -108,10 +145,45 @@ export async function metadata(input, context) {
 export async function read(input, context) {
     const token = context?.credential?.token;
     if (!input?.fileId) throw Object.assign(new Error("not-found: read requires a fileId parameter"), { faultClass: "not-found" });
-    const f = await drive(`/files/${encodeURIComponent(input.fileId)}`, token, {
+    const id = encodeURIComponent(input.fileId);
+    const f = await drive(`/files/${id}`, token, {
         fields: input?.fields ?? FILE_FIELDS,
         supportsAllDrives: true,
     });
+
+    // media:true -> also fetch the bytes. Google-native files have no bytes; they must be exported.
+    let content = null;
+    let contentEncoding = null;
+    let contentMimeType = null;
+    let contentBytes = null;
+    if (input?.media) {
+        const isNative = (f.mimeType ?? "").startsWith("application/vnd.google-apps.");
+        let got;
+        if (isNative) {
+            const exportMime = input?.exportMimeType || EXPORT_DEFAULTS[f.mimeType];
+            if (!exportMime) {
+                throw Object.assign(new Error(`drive-error: ${f.mimeType} cannot be downloaded as-is`), {
+                    faultClass: "drive-error",
+                    detail: { fix: "pass exportMimeType for this Google-native file, or drop media (folders and unknown native types are not exportable)" },
+                });
+            }
+            got = await driveMedia(`/files/${id}/export`, token, { mimeType: exportMime, supportsAllDrives: true });
+            contentMimeType = exportMime;
+        } else {
+            if (f.size && Number(f.size) > MAX_CONTENT_BYTES) {
+                throw Object.assign(new Error(`content-too-large: ${f.size} bytes exceeds the ${MAX_CONTENT_BYTES}-byte cap`), {
+                    faultClass: "content-too-large",
+                    detail: { fix: "omit media to read metadata only, or fetch the file via webContentLink outside this adapter" },
+                });
+            }
+            got = await driveMedia(`/files/${id}`, token, { alt: "media", supportsAllDrives: true });
+            contentMimeType = got.contentType ?? f.mimeType ?? null;
+        }
+        content = got.buffer.toString("base64");
+        contentEncoding = "base64";
+        contentBytes = got.buffer.length;
+    }
+
     return {
         data: [
             {
@@ -132,6 +204,10 @@ export async function read(input, context) {
                 owners: f.owners ?? [],
                 lastModifyingUser: f.lastModifyingUser ?? null,
                 driveId: f.driveId ?? null,
+                content,
+                contentEncoding,
+                contentMimeType,
+                contentBytes,
             },
         ],
         freshness: new Date().toISOString(),
