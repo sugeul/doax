@@ -49,6 +49,13 @@ const PROVIDERS: Record<string, Provider> = {
         verifyUrl: "https://graph.microsoft.com/v1.0/me",
         verifyAccount: (b) => ((b.userPrincipalName as string) ?? (b.mail as string) ?? null),
     },
+    "@doax/gmail-login": {
+        secretId: "doax-adapter-gmail",
+        scope: "openid email offline_access https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/contacts.readonly https://www.googleapis.com/auth/tasks.readonly",
+        authParams: { access_type: "offline", prompt: "consent", include_granted_scopes: "true" },
+        verifyUrl: "https://www.googleapis.com/oauth2/v3/userinfo",
+        verifyAccount: (b) => ((b.email as string) ?? null),
+    },
 };
 
 const DEFAULT_APPID = "@doax/google-drive-login";

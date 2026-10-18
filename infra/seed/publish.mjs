@@ -22,6 +22,7 @@ const AUTHENTICATOR = "@doax/slack-login@1.0.0";
 const TEAMS_AUTHENTICATOR = "@doax/teams-login@1.0.0";
 const DRIVE_AUTHENTICATOR = "@doax/google-drive-login@1.0.0";
 const ONEDRIVE_AUTHENTICATOR = "@doax/onedrive-login@1.0.0";
+const GMAIL_AUTHENTICATOR = "@doax/gmail-login@1.0.0";
 
 const slackFaults = (extra = []) => [
     {
@@ -166,6 +167,53 @@ const driveContentTooLarge = {
     callerVisibleEffect: "operation fails, no side effect; no content is returned",
     expectedFrequency: "large files only",
     recommendedCallerAction: "omit media to read metadata only, or fetch the file via its webContentLink outside this adapter",
+};
+
+const googleFaults = (extra = []) => [
+    {
+        faultClass: "missing-scope",
+        trigger: "the refresh token lacks an OAuth scope the operation needs",
+        callerVisibleEffect: "operation fails, no side effect; the error names the needed scope",
+        expectedFrequency: "setup-time; once the token carries the scope it stops",
+        recommendedCallerAction: "re-consent at https://auth.doax.io?appid=@doax/gmail-login, then re-authenticate (doax auth set @doax/gmail-login --secret <refresh-token>)",
+    },
+    {
+        faultClass: "invalid-auth",
+        trigger: "the access token expired, or the refresh token was revoked/expired",
+        callerVisibleEffect: "operation fails, no side effect",
+        expectedFrequency: "access tokens expire ~hourly; normally refreshed silently",
+        recommendedCallerAction: "re-mint a refresh token at https://auth.doax.io?appid=@doax/gmail-login and re-authenticate",
+    },
+    {
+        faultClass: "access-denied",
+        trigger: "the caller's token may not read the target resource, or a required Google API is not enabled for the project",
+        callerVisibleEffect: "operation fails, no side effect; the error names the enable step when it is an API-not-enabled case",
+        expectedFrequency: "setup-time / caller error",
+        recommendedCallerAction: "enable the needed API in the doax-adapter-gmail Cloud project, or confirm the resource is visible to the consenting account",
+    },
+    {
+        faultClass: "google-unavailable",
+        trigger: "a Google API outage or network failure",
+        callerVisibleEffect: "operation fails, no side effect",
+        expectedFrequency: "rare",
+        recommendedCallerAction: "retry after a delay",
+    },
+    {
+        faultClass: "rate-limited",
+        trigger: "a Google API rate limit (HTTP 403 rateLimitExceeded or 429)",
+        callerVisibleEffect: "operation fails, no side effect",
+        expectedFrequency: "under bursts",
+        recommendedCallerAction: "retry after the advertised delay with exponential backoff",
+    },
+    ...extra,
+];
+
+const googleNotFound = {
+    faultClass: "not-found",
+    trigger: "an id or cursor is wrong/expired, or the resource is not visible to the caller",
+    callerVisibleEffect: "operation fails, no side effect",
+    expectedFrequency: "caller error / expired delta cursor",
+    recommendedCallerAction: "check the id via the matching list resource; for delta reads, read with no cursor to resync",
 };
 
 const onedriveNotFound = {
@@ -819,6 +867,95 @@ const RESOURCES = [
             },
         },
     },
+    {
+        identity: GMAIL_AUTHENTICATOR,
+        file: "gmail-login.mjs",
+        manifest: {
+            kind: "authenticator",
+            summary: "Log in to Google user APIs (Gmail, Calendar, Contacts, Tasks) with an OAuth refresh token",
+            description:
+                "Shared secret-entry authenticator for the caller's Google account. The caller consents once at https://auth.doax.io?appid=@doax/gmail-login and pastes the refresh token here; this module exchanges it for an access token using the OAuth client it reads from AWS Secrets Manager (doax-adapter-gmail) via the local aws-cli. Every @doax/{gmail,calendar,contacts,tasks}-* resource references this authenticator, so one login serves them all.",
+            owner: OWNER,
+            requiredTier: 3,
+            executionLocation: "caller-device",
+            subject: "personal",
+            auditScope: ["auth"],
+            dependencies: [],
+            interfaceMapping: { describe: { kind: "native" }, authenticate: { kind: "native" } },
+            authentication: {
+                targetSystem: "Google user APIs (Gmail, Calendar, People, Tasks) via Google OAuth 2.0 (https://oauth2.googleapis.com/token)",
+                subject: "personal",
+                interactionKinds: ["secret-entry"],
+                interactionDetails: {
+                    "secret-entry": {
+                        instruction: "paste the Google OAuth refresh token minted at https://auth.doax.io?appid=@doax/gmail-login; it is exchanged for an access token and verified via the userinfo endpoint",
+                        entryPoint: "https://auth.doax.io?appid=@doax/gmail-login — authorize the Google app, then copy the refresh token shown",
+                        docs: "https://developers.google.com/identity/protocols/oauth2/web-server#offline",
+                    },
+                },
+                credentialMaterial: "OAuth 2.0 access token minted from the pasted refresh token",
+                lifetime: {
+                    period: "access token ~60 min",
+                    refreshable: true,
+                    refreshBehavior: "refresh mode re-exchanges the cached refresh token; if it is revoked or expired, a new one must be minted at https://auth.doax.io?appid=@doax/gmail-login",
+                },
+                verificationMethod: "GET https://www.googleapis.com/oauth2/v3/userinfo (no side effects)",
+                stepUpBehavior: "same as initial (re-paste the refresh token)",
+                requiredInputs: ["secret"],
+                scopeRequested: "whatever the pasted refresh token carries (expected: openid email offline_access gmail.readonly calendar.readonly contacts.readonly tasks.readonly); this flow requests no new scopes",
+                revocation: "revoke the app's access at https://myaccount.google.com/permissions",
+            },
+            serviceLevel: {
+                expectedFaults: googleFaults(),
+                degradationBehavior: "fail fast; the caller is told which fault class occurred",
+                dependencyLevels: {},
+                measurement: "not measured",
+                supportCommitment: "none",
+                perAttemptFailureProbability: "unknown; declared assumption ~1%",
+            },
+        },
+    },
+    ...[
+        { name: "gmail-messages", file: "gmail-messages.mjs", summary: "List the caller's Gmail messages matching a query", scopes: ["https://www.googleapis.com/auth/gmail.readonly"], description: "One collection: Gmail messages matching a query, via users.messages.list, each enriched with header metadata. Read params: q, labelIds, maxResults (default 20), includeSpamTrash, cursor. An `id` is the `messageId` of @doax/gmail-get.", faults: googleFaults() },
+        { name: "gmail-get", file: "gmail-get.mjs", summary: "Read a single Gmail message", scopes: ["https://www.googleapis.com/auth/gmail.readonly"], description: "One collection of one record: a Gmail message via users.messages.get (format=full), with the plain-text/html body decoded. Read params: messageId (required), format. The messageId comes from @doax/gmail-messages.", faults: googleFaults([googleNotFound]) },
+        { name: "gmail-history", file: "gmail-history.mjs", summary: "Read the caller's Gmail change feed (delta)", scopes: ["https://www.googleapis.com/auth/gmail.readonly"], description: "One collection: the Gmail change feed via users.history.list. No cursor establishes a baseline historyId; poll with nextDeltaToken thereafter. Read params: cursor, pageToken, historyTypes, labelId. Returns continuation and nextDeltaToken.", faults: googleFaults([googleNotFound]) },
+        { name: "gmail-labels", file: "gmail-labels.mjs", summary: "List the caller's Gmail labels", scopes: ["https://www.googleapis.com/auth/gmail.readonly"], description: "One collection: the caller's Gmail labels via users.labels.list. No read params. An `id` is a value for the `labelIds` parameter of @doax/gmail-messages.", faults: googleFaults() },
+        { name: "calendar-list", file: "calendar-list.mjs", summary: "List the calendars on the caller's calendar list", scopes: ["https://www.googleapis.com/auth/calendar.readonly"], description: "One collection: the caller's calendars via calendarList.list. Read params: showHidden, cursor. An `id` is the `calendarId` of @doax/calendar-events and @doax/calendar-event-get.", faults: googleFaults() },
+        { name: "calendar-events", file: "calendar-events.mjs", summary: "Read the events of one calendar (list and delta)", scopes: ["https://www.googleapis.com/auth/calendar.readonly"], description: "One collection: events of one calendar via events.list — list and delta in one resource. Read params: calendarId (default primary), timeMin, timeMax, q, singleEvents, maxResults, cursor (a pageToken or a syncToken). Returns continuation and nextDeltaToken (a syncToken).", faults: googleFaults([googleNotFound]) },
+        { name: "calendar-event-get", file: "calendar-event-get.mjs", summary: "Read a single calendar event", scopes: ["https://www.googleapis.com/auth/calendar.readonly"], description: "One collection of one record: a calendar event via events.get. Read params: calendarId (default primary), eventId (required). The eventId comes from @doax/calendar-events.", faults: googleFaults([googleNotFound]) },
+        { name: "contacts-list", file: "contacts-list.mjs", summary: "List the caller's contacts (list and delta)", scopes: ["https://www.googleapis.com/auth/contacts.readonly"], description: "One collection: the caller's contacts via People people.connections.list — list and delta. Read params: pageSize, personFields, cursor (a pageToken or a syncToken). Returns continuation and nextDeltaToken (a syncToken). A `resourceName` is the parameter of @doax/contacts-get.", faults: googleFaults([googleNotFound]) },
+        { name: "contacts-get", file: "contacts-get.mjs", summary: "Read a single contact", scopes: ["https://www.googleapis.com/auth/contacts.readonly"], description: "One collection of one record: a contact via People people.get. Read params: resourceName (required), personFields. The resourceName comes from @doax/contacts-list.", faults: googleFaults([googleNotFound]) },
+        { name: "tasklists-list", file: "tasklists-list.mjs", summary: "List the caller's task lists", scopes: ["https://www.googleapis.com/auth/tasks.readonly"], description: "One collection: the caller's task lists via tasklists.list. Read params: maxResults, cursor. An `id` is the `tasklist` parameter of @doax/tasks-list and @doax/task-get.", faults: googleFaults() },
+        { name: "tasks-list", file: "tasks-list.mjs", summary: "List the tasks in one task list", scopes: ["https://www.googleapis.com/auth/tasks.readonly"], description: "One collection: the tasks in one list via tasks.list. Read params: tasklist (required), showCompleted, showHidden, updatedMin, maxResults, cursor. A task `id` is the `task` parameter of @doax/task-get.", faults: googleFaults([googleNotFound]) },
+        { name: "task-get", file: "task-get.mjs", summary: "Read a single task", scopes: ["https://www.googleapis.com/auth/tasks.readonly"], description: "One collection of one record: a task via tasks.get. Read params: tasklist (required), task (required). The ids come from @doax/tasklists-list and @doax/tasks-list.", faults: googleFaults([googleNotFound]) },
+    ].map((r) => ({
+        identity: `@doax/${r.name}@1.0.0`,
+        file: r.file,
+        manifest: {
+            kind: "data-source",
+            summary: r.summary,
+            requiredScopes: r.scopes,
+            description: r.description,
+            owner: OWNER,
+            requiredTier: 3,
+            executionLocation: "caller-device",
+            authenticator: GMAIL_AUTHENTICATOR,
+            auditScope: ["metadata-read", "data-read"],
+            dependencies: [GMAIL_AUTHENTICATOR],
+            interfaceMapping: { describe: { kind: "native" }, metadata: { kind: "native" }, read: { kind: "native" } },
+            serviceLevel: {
+                expectedFaults: r.faults,
+                degradationBehavior: "fail fast; no partial pages are fabricated",
+                dependencyLevels: { [GMAIL_AUTHENTICATOR]: "per-attempt failure ~1%" },
+                measurement: "not measured",
+                supportCommitment: "none",
+                refreshCadence: "realtime",
+                tolerance: "none declared",
+                annualLatenessBudget: "best-effort (realtime source; lateness is Google availability)",
+                latencyTarget: "read completes in < 3s p95 under normal Google latency",
+            },
+        },
+    })),
 ];
 
 for (const resource of RESOURCES) {
