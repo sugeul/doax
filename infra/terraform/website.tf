@@ -32,6 +32,35 @@ resource "aws_s3_object" "aya" {
   cache_control = "public, max-age=300"
 }
 
+# The playbooks (local / cowork / monitor app shapes). One .html object per page; the clean
+# permalink (/playbook/<category>/<situation>, no extension) resolves to it via the site-router
+# CloudFront Function below. Built by infra/build-playbook.mjs into build/site/playbook*.
+locals {
+  playbook_pages = toset(concat(
+    [for f in fileset("${path.module}/build/site", "playbook*") : f], # /playbook.html
+    [for f in fileset("${path.module}/build/site", "playbook/**") : f],
+  ))
+}
+
+resource "aws_s3_object" "playbook" {
+  for_each      = local.playbook_pages
+  bucket        = aws_s3_bucket.site.id
+  key           = each.value
+  source        = "${path.module}/build/site/${each.value}"
+  etag          = filemd5("${path.module}/build/site/${each.value}")
+  content_type  = "text/html; charset=utf-8"
+  cache_control = "public, max-age=300"
+}
+
+# Clean URLs for /playbook/*: extensionless requests resolve to the .html object. Scoped to
+# /playbook so existing extensionless objects (/install, ...) are untouched.
+resource "aws_cloudfront_function" "site_router" {
+  name    = "${local.name}-site-router"
+  runtime = "cloudfront-js-2.0"
+  publish = true
+  code    = file("${path.module}/edge/site-router.js")
+}
+
 # The CLI install guide, served at https://doax.io/install
 resource "aws_s3_object" "install_page" {
   bucket        = aws_s3_bucket.site.id
@@ -136,6 +165,11 @@ resource "aws_cloudfront_distribution" "site" {
     allowed_methods        = ["GET", "HEAD", "OPTIONS"]
     cached_methods         = ["GET", "HEAD"]
     cache_policy_id        = local.cache_optimized_policy_id
+
+    function_association {
+      event_type   = "viewer-request"
+      function_arn = aws_cloudfront_function.site_router.arn
+    }
   }
 
   custom_error_response {

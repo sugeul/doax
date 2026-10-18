@@ -15,6 +15,7 @@
     "devDependencies": {
         "@types/node": "^24.0.0",
         "esbuild": "^0.24.2",
+        "marked": "^18.1.1",
         "typescript": "^5.9.0",
         "vitest": "^4.1.0"
     }

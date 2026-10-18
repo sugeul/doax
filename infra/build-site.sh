@@ -23,6 +23,9 @@ cp "$ROOT/infra/site/install.sh" "$OUT/install.sh"
 cp "$ROOT/infra/site/install.ps1" "$OUT/install.ps1"
 cp "$ROOT/infra/site/doax.ps1" "$OUT/doax.ps1"
 
+# Render the playbooks (playbook/**) into one page served at /playbook
+node "$ROOT/infra/build-playbook.mjs"
+
 cd "$ROOT"
 pnpm -w exec esbuild "$ROOT/apps/doax-cli/src/main.ts" \
     --bundle \
