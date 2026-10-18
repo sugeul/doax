@@ -20,6 +20,7 @@ if (!bearer && !admin) {
 const OWNER = "doax.io operators <registry@doax.io>";
 const AUTHENTICATOR = "@doax/slack-login@1.0.0";
 const TEAMS_AUTHENTICATOR = "@doax/teams-login@1.0.0";
+const DRIVE_AUTHENTICATOR = "@doax/google-drive-login@1.0.0";
 
 const slackFaults = (extra = []) => [
     {
@@ -109,6 +110,53 @@ const teamsAccessDenied = {
     callerVisibleEffect: "operation fails, no side effect",
     expectedFrequency: "setup-time",
     recommendedCallerAction: "join the team/channel or ask an owner to add the user",
+};
+
+const driveFaults = (extra = []) => [
+    {
+        faultClass: "missing-scope",
+        trigger: "the refresh token lacks the Drive OAuth scope the operation needs (drive.readonly)",
+        callerVisibleEffect: "operation fails, no side effect; the error names the needed scope",
+        expectedFrequency: "setup-time; once the token carries drive.readonly it stops",
+        recommendedCallerAction: "re-consent at https://auth.doax.io so the token carries drive.readonly, then re-authenticate (doax auth set @doax/google-drive-login --secret <refresh-token>)",
+    },
+    {
+        faultClass: "invalid-auth",
+        trigger: "the access token expired, or the refresh token was revoked/expired and cannot be refreshed",
+        callerVisibleEffect: "operation fails, no side effect",
+        expectedFrequency: "access tokens expire ~hourly; normally refreshed silently from the stored refresh token",
+        recommendedCallerAction: "re-mint a refresh token at https://auth.doax.io and re-authenticate (doax auth set @doax/google-drive-login)",
+    },
+    {
+        faultClass: "access-denied",
+        trigger: "the caller's token may not read the target file or shared drive",
+        callerVisibleEffect: "operation fails, no side effect",
+        expectedFrequency: "caller error / sharing change",
+        recommendedCallerAction: "confirm the file is shared with the consenting account, or belongs to a shared drive it can access",
+    },
+    {
+        faultClass: "drive-unavailable",
+        trigger: "Google Drive outage or network failure",
+        callerVisibleEffect: "operation fails, no side effect",
+        expectedFrequency: "rare",
+        recommendedCallerAction: "retry after a delay",
+    },
+    {
+        faultClass: "rate-limited",
+        trigger: "Google Drive API rate limit (HTTP 403 rateLimitExceeded or 429)",
+        callerVisibleEffect: "operation fails, no side effect",
+        expectedFrequency: "under bursts",
+        recommendedCallerAction: "retry after the advertised delay with exponential backoff",
+    },
+    ...extra,
+];
+
+const driveNotFound = {
+    faultClass: "not-found",
+    trigger: "the file id or page token is wrong, or the token cannot see the resource",
+    callerVisibleEffect: "operation fails, no side effect",
+    expectedFrequency: "caller error",
+    recommendedCallerAction: "check the id via @doax/google-drive-list; for changes, read with no cursor to get a fresh baseline token",
 };
 
 const RESOURCES = [
@@ -481,6 +529,141 @@ const RESOURCES = [
                 tolerance: "none declared",
                 annualLatenessBudget: "best-effort (realtime source; lateness is Graph availability)",
                 latencyTarget: "read completes in < 3s p95 under normal Graph latency",
+            },
+        },
+    },
+    {
+        identity: DRIVE_AUTHENTICATOR,
+        file: "google-drive-login.mjs",
+        manifest: {
+            kind: "authenticator",
+            summary: "Log in to Google Drive with an OAuth refresh token",
+            description:
+                "Secret-entry authenticator for Google Drive. The caller mints a refresh token once at https://auth.doax.io (the consent-redirect mirror) and pastes it here; this module exchanges it for a short-lived access token using the OAuth client it reads from AWS Secrets Manager via the local aws-cli. refresh mode re-mints the access token silently (§7.6). Every @doax/google-drive-* resource references this authenticator, so one login serves them all.",
+            owner: OWNER,
+            requiredTier: 3,
+            executionLocation: "caller-device",
+            subject: "personal",
+            auditScope: ["auth"],
+            dependencies: [],
+            interfaceMapping: { describe: { kind: "native" }, authenticate: { kind: "native" } },
+            authentication: {
+                targetSystem: "Google Drive API (https://www.googleapis.com/drive/v3) via Google OAuth 2.0 (https://oauth2.googleapis.com/token)",
+                subject: "personal",
+                interactionKinds: ["secret-entry"],
+                interactionDetails: {
+                    "secret-entry": {
+                        instruction: "paste the Google OAuth refresh token minted at https://auth.doax.io?appid=@doax/google-drive-login; it is exchanged for an access token and verified via drive/v3/about",
+                        entryPoint: "https://auth.doax.io?appid=@doax/google-drive-login — authorize the Drive app, then copy the refresh token shown",
+                        docs: "https://developers.google.com/identity/protocols/oauth2/web-server#offline",
+                    },
+                },
+                credentialMaterial: "OAuth 2.0 access token minted from the pasted refresh token",
+                lifetime: {
+                    period: "access token ~60 min",
+                    refreshable: true,
+                    refreshBehavior: "refresh mode re-exchanges the cached refresh token for a new access token with no user interaction; if it is revoked or expired, refresh fails and a new refresh token must be minted at https://auth.doax.io",
+                },
+                verificationMethod: "GET drive/v3/about?fields=user (no side effects)",
+                stepUpBehavior: "same as initial (re-paste the refresh token)",
+                requiredInputs: ["secret"],
+                scopeRequested: "whatever the pasted refresh token already carries (expected: https://www.googleapis.com/auth/drive.readonly); this flow requests no new scopes",
+                revocation: "revoke the app's access at https://myaccount.google.com/permissions",
+            },
+            serviceLevel: {
+                expectedFaults: driveFaults(),
+                degradationBehavior: "fail fast; the caller is told which fault class occurred",
+                dependencyLevels: {},
+                measurement: "not measured",
+                supportCommitment: "none",
+                perAttemptFailureProbability: "unknown; declared assumption ~1%",
+            },
+        },
+    },
+    {
+        identity: "@doax/google-drive-list@1.0.0",
+        file: "google-drive-list.mjs",
+        manifest: {
+            kind: "data-source",
+            summary: "List the Google Drive files the caller can see",
+            requiredScopes: ["https://www.googleapis.com/auth/drive.readonly"],
+            description:
+                "One collection: Drive files visible to the caller's token, via GET /drive/v3/files. Read params: q (Drive query), pageSize (default 100), orderBy, driveId, corpora, includeItemsFromAllDrives (default true), fields, cursor (a nextPageToken). The natural first read — its `id` field is the `fileId` parameter of @doax/google-drive-get.",
+            owner: OWNER,
+            requiredTier: 3,
+            executionLocation: "caller-device",
+            authenticator: DRIVE_AUTHENTICATOR,
+            auditScope: ["metadata-read", "data-read"],
+            dependencies: [DRIVE_AUTHENTICATOR],
+            interfaceMapping: { describe: { kind: "native" }, metadata: { kind: "native" }, read: { kind: "native" } },
+            serviceLevel: {
+                expectedFaults: driveFaults(),
+                degradationBehavior: "fail fast; no partial pages are fabricated",
+                dependencyLevels: { [DRIVE_AUTHENTICATOR]: "per-attempt failure ~1%" },
+                measurement: "not measured",
+                supportCommitment: "none",
+                refreshCadence: "realtime",
+                tolerance: "none declared",
+                annualLatenessBudget: "best-effort (realtime source; lateness is Drive availability)",
+                latencyTarget: "read completes in < 3s p95 under normal Drive latency",
+            },
+        },
+    },
+    {
+        identity: "@doax/google-drive-changes@1.0.0",
+        file: "google-drive-changes.mjs",
+        manifest: {
+            kind: "data-source",
+            summary: "Read the change feed (delta) for the caller's Google Drive",
+            requiredScopes: ["https://www.googleapis.com/auth/drive.readonly"],
+            description:
+                "One collection: the Drive change feed, via GET /drive/v3/changes. With no cursor, read() bootstraps a baseline token (GET /changes/startPageToken) and lists from it; thereafter the caller polls with the `nextDeltaToken` the read returns. Read params: cursor, driveId, includeRemoved (default true), includeItemsFromAllDrives (default true), pageSize (default 100), restrictToMyDrive. The read returns both `continuation` (more pages now) and `nextDeltaToken` (poll again later).",
+            owner: OWNER,
+            requiredTier: 3,
+            executionLocation: "caller-device",
+            authenticator: DRIVE_AUTHENTICATOR,
+            auditScope: ["metadata-read", "data-read"],
+            dependencies: [DRIVE_AUTHENTICATOR],
+            interfaceMapping: { describe: { kind: "native" }, metadata: { kind: "native" }, read: { kind: "native" } },
+            serviceLevel: {
+                expectedFaults: driveFaults([driveNotFound]),
+                degradationBehavior: "fail fast; no partial pages are fabricated",
+                dependencyLevels: { [DRIVE_AUTHENTICATOR]: "per-attempt failure ~1%" },
+                measurement: "not measured",
+                supportCommitment: "none",
+                refreshCadence: "realtime",
+                tolerance: "none declared",
+                annualLatenessBudget: "best-effort (realtime source; lateness is Drive availability)",
+                latencyTarget: "read completes in < 3s p95 under normal Drive latency",
+            },
+        },
+    },
+    {
+        identity: "@doax/google-drive-get@1.0.0",
+        file: "google-drive-get.mjs",
+        manifest: {
+            kind: "data-source",
+            summary: "Read the metadata of a single Google Drive file",
+            requiredScopes: ["https://www.googleapis.com/auth/drive.readonly"],
+            description:
+                "One collection of one record: the metadata of a single Drive file, via GET /drive/v3/files/{fileId}. Read params: fileId (required), fields (optional override). The fileId comes from @doax/google-drive-list (its `id`) or @doax/google-drive-changes (its `fileId`).",
+            owner: OWNER,
+            requiredTier: 3,
+            executionLocation: "caller-device",
+            authenticator: DRIVE_AUTHENTICATOR,
+            auditScope: ["metadata-read", "data-read"],
+            dependencies: [DRIVE_AUTHENTICATOR],
+            interfaceMapping: { describe: { kind: "native" }, metadata: { kind: "native" }, read: { kind: "native" } },
+            serviceLevel: {
+                expectedFaults: driveFaults([driveNotFound]),
+                degradationBehavior: "fail fast; a missing or invisible file is a not-found fault",
+                dependencyLevels: { [DRIVE_AUTHENTICATOR]: "per-attempt failure ~1%" },
+                measurement: "not measured",
+                supportCommitment: "none",
+                refreshCadence: "realtime",
+                tolerance: "none declared",
+                annualLatenessBudget: "best-effort (realtime source; lateness is Drive availability)",
+                latencyTarget: "read completes in < 2s p95 under normal Drive latency",
             },
         },
     },
