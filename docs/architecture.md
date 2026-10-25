@@ -155,7 +155,7 @@ With those two steps, a company's people authenticate as themselves into `@org`,
 
 ## 10. Spec deltas from v0.1
 
-The product requires exactly one addition beyond spec v0.1. It is a configuration extension, **not** a new resource kind.
+The product requires these additions beyond spec v0.1. Neither is a new resource kind: §10.1 is a configuration extension, §10.2 an interface between the Executor CLI and an Auth Server.
 
 ### 10.1 Per-namespace trusted-issuer registration (extends spec §10, §7.2)
 
@@ -163,6 +163,44 @@ Spec v0.1 assumes single-tenant issuer trust: §7.2 says *"a Registry Server dec
 
 - **Home:** an extension to **Namespace management (spec §10)** — "set trusted issuer(s) for this namespace" — alongside the existing visibility defaults, Tier floor, audit destination, and grant lists.
 - **Not a resource kind.** Making the identity provider a `Resource` would be circular: resolving a resource requires a token, so you cannot make the issuer of tokens a thing that must itself be resolved under token auth. §7 keeps the Auth Server a **component** precisely so it sits outside the resource graph as the root of trust. The four kinds (§4.2) stay four.
+
+### 10.2 Interactive registry login: `doax login --web` (extends spec §7.1, §9.1 item 1)
+
+Spec §9.1 has the Executor CLI obtain a Registry token "through whatever login that Auth Server uses". The CLI knows two: an email code (`--email`) and a pasted token (`--token`). An Auth Server that signs people in only on a web page — Google Sign-In, an organization's SSO — leaves the caller copying a token from that page into a terminal. `--web` closes the gap the way `gh auth login --web` and `gcloud auth login` do: the CLI opens the page, and the page hands the token back to the CLI on the caller's own machine (a loopback redirect, RFC 8252 §7.3).
+
+**Discovery.** A Registry declares its login methods at `GET /auth/methods`, without a token:
+
+```json
+{"methods": ["web", "token"], "web": {"login": "/auth/login"}}
+```
+
+`methods` lists any of `web`, `email`, `token`. A Registry that does not answer `/auth/methods` is taken to offer `email` and `token`, as v0.1 Registries do.
+
+**Registry side: the login page.** The page named by `web.login` signs the person in however its Auth Server does. It takes two query parameters:
+
+| Parameter | Rule |
+|---|---|
+| `callback` | MUST be `http://127.0.0.1:<port>/<path>` or `http://localhost:<port>/<path>`. Anything else — another host, `https`, userinfo, a missing port — is refused with an error on the page; the token is never sent. |
+| `state` | MUST be present with `callback`: 22 to 128 characters of `[A-Za-z0-9_-]` (at least 128 bits from the CLI). Echoed back unchanged. |
+
+After a successful sign-in the page delivers the token by a **top-level form POST** (`application/x-www-form-urlencoded`, fields `token` and `state`) to `callback`. It MUST NOT put the token in a URL: a query or fragment is kept in browser history and can leak through logs. A page opened without `callback` behaves as before (it shows the token to copy), which is also the fallback when the browser runs on another machine than the CLI. A sign-in that fails is reported on the page and never reaches the callback.
+
+**CLI side: `doax login --registry <url> --web [--no-browser] [--timeout <seconds>]`.**
+
+1. Read `/auth/methods`. If `web` is not offered, stop with an error naming the methods that are.
+2. Listen on `127.0.0.1` at a port the OS assigns, on one random path. Draw `state` from a CSPRNG (32 bytes, base64url).
+3. Open the browser at `<url><web.login>?callback=<listener URL>&state=<state>`. Always print the URL too; with `--no-browser`, only print it.
+4. Wait for **one** `POST` to that path whose `state` matches, answering it with a page that says the sign-in is done and the browser tab can be closed. Any other request — another path, a method other than POST, a wrong or missing `state` — is answered `400` and does not end the wait. Default timeout 300 seconds; on timeout, stop with an error that suggests opening `<url><web.login>` without `callback` and running `doax login --token`.
+5. Close the listener, verify the token with `/whoami` as `--token` does, and store it the same way.
+
+`--web` cannot be combined with `--email` or `--token`. A plain `doax login` without flags keeps its current prompts; whether it should default to `web` where offered is left for later.
+
+**Why this is safe.**
+
+- The token goes from the browser to a listener bound to the loopback interface only; it never crosses the network again, and a Registry refuses any callback that would send it elsewhere, so a crafted link cannot exfiltrate it.
+- `state` binds the response to this CLI run: another local page or process cannot inject its own token (login CSRF), because it does not know `state`, and the listener keeps waiting for the real one.
+- A form POST keeps the token out of the address bar, history and referrers. Browsers allow a top-level navigation from an `https` page to a loopback `http` URL; it is a subresource fetch from that page, not this, that Private Network Access restrictions block.
+- Nothing here changes the token (§7.2) or who may sign in: the page is the Auth Server's own login, and the CLI only saves time copying.
 
 ---
 
