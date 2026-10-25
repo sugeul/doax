@@ -99,10 +99,18 @@ const defaultPrompt = async (question: string): Promise<string> => {
     }
 };
 
+/**
+  * The platform's browser opener for a URL, run without a shell. Not `cmd /c start` on Windows: cmd reads `&` in the
+  * query as a command separator, so the browser would get the URL cut before `&state=`.
+  */
+export function browserCommand(url: string, platform: NodeJS.Platform = process.platform): { command: string; args: string[] } {
+    if (platform === "win32") return { command: "rundll32", args: ["url.dll,FileProtocolHandler", url] };
+    return { command: platform === "darwin" ? "open" : "xdg-open", args: [url] };
+}
+
 /** Fire-and-forget: hand the URL to the platform's browser opener. The URL is always printed too. */
 function openInBrowser(url: string): void {
-    const command = process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open";
-    const args = process.platform === "win32" ? ["/c", "start", "", url] : [url];
+    const { command, args } = browserCommand(url);
     void import("node:child_process").then(({ spawn }) => {
         const child = spawn(command, args, { stdio: "ignore", detached: true });
         child.on("error", () => {

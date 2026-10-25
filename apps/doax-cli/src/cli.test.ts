@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { type CliDeps, run, VERSION } from "./cli.ts";
+import { browserCommand, type CliDeps, run, VERSION } from "./cli.ts";
 
 const deps = (fetchImpl: typeof fetch): CliDeps => ({ config: { registry: "https://registry.test" }, fetch: fetchImpl });
 
@@ -103,5 +103,12 @@ describe("doax cli", () => {
         const result = await run(["login", "--web", "--token", "x", "--registry", "https://registry.test"], deps(fetchImpl));
         expect(result.exitCode).toBe(2);
         expect(result.stderr).toContain("cannot be combined");
+    });
+
+    it("opens the browser without a shell, so & in the login URL survives on Windows", () => {
+        const url = "https://registry.test/auth/login?callback=http%3A%2F%2F127.0.0.1%3A5%2Fx&state=abc";
+        expect(browserCommand(url, "win32")).toEqual({ command: "rundll32", args: ["url.dll,FileProtocolHandler", url] });
+        expect(browserCommand(url, "darwin")).toEqual({ command: "open", args: [url] });
+        expect(browserCommand(url, "linux")).toEqual({ command: "xdg-open", args: [url] });
     });
 });
