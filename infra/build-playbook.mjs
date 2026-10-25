@@ -69,10 +69,12 @@ table{border-collapse:collapse;width:100%;margin:12px 0;font-size:13.5px;display
 th,td{border:1px solid #1d2b43;padding:8px 11px;text-align:left;vertical-align:top}th{background:#0f1828;color:#cfe0f5}
 hr{border:0;border-top:1px solid #182438;margin:22px 0}
 .cards{display:grid;gap:16px;margin:16px 0 36px}
-.card{display:block;background:#0b1220;border:1px solid #182438;border-radius:14px;padding:18px 20px}
-.card:hover{border-color:#2b6b63;text-decoration:none}
-.card h3{margin:0 0 6px;font-size:18px;color:#9fe9dd}.card p{margin:0;color:#91a4c2;font-size:13.5px}
-.card .sit{margin:10px 0 0;padding:0;list-style:none;font-size:13.5px}.card .sit li{margin:4px 0}
+.card{background:#0b1220;border:1px solid #182438;border-radius:14px;padding:18px 20px}
+.card:hover{border-color:#2b6b63}
+.card h3{margin:0 0 6px;font-size:18px}.card h3 a{color:#9fe9dd}
+.card p{margin:0;color:#91a4c2;font-size:13.5px}
+.card .sit{margin:12px 0 0;padding:0;list-style:none;font-size:13.5px}.card .sit li{margin:5px 0;padding-left:14px;position:relative}
+.card .sit li:before{content:"›";position:absolute;left:0;color:#5c7097}
 footer{border-top:1px solid #182438;color:#5c7097;font-size:13px;padding:22px 0 60px}`;
 
 function shell(title, crumbHtml, bodyHtml, { desc } = {}) {
@@ -98,7 +100,8 @@ const pages = {}; // key -> html
 const cards = CATEGORIES.map(({ id, situations }) => {
     const readme = read(id, "README");
     const sits = situations.map((s) => `<li><a href="/playbook/${id}/${s}">${esc(titleOf(read(id, s)))}</a></li>`).join("");
-    return `<a class="card" href="/playbook/${id}"><h3>${esc(titleOf(readme))}</h3><p>${esc(blurbOf(readme))}</p><ul class="sit">${sits}</ul></a>`;
+    // div, not a nested <a>: the card holds its own situation links (anchors can't nest).
+    return `<div class="card"><h3><a href="/playbook/${id}">${esc(titleOf(readme))}</a></h3><p>${marked.parseInline(blurbOf(readme))}</p><ul class="sit">${sits}</ul></div>`;
 }).join("\n");
 pages["playbook"] = shell(
     "Playbooks",
