@@ -155,7 +155,7 @@ With those two steps, a company's people authenticate as themselves into `@org`,
 
 ## 10. Spec deltas from v0.1
 
-The product requires these additions beyond spec v0.1. None is a new resource kind. §10.1 is a configuration extension; §10.2–§10.6 come from the first organization that puts **every** interface of an internal system behind doax (fadmin on day1-doax, a private registry), its web portal included, where a resource's backing service has to enforce what the executor cannot.
+The product requires exactly one addition beyond spec v0.1. It is a configuration extension, **not** a new resource kind.
 
 ### 10.1 Per-namespace trusted-issuer registration (extends spec §10, §7.2)
 
@@ -163,43 +163,6 @@ Spec v0.1 assumes single-tenant issuer trust: §7.2 says *"a Registry Server dec
 
 - **Home:** an extension to **Namespace management (spec §10)** — "set trusted issuer(s) for this namespace" — alongside the existing visibility defaults, Tier floor, audit destination, and grant lists.
 - **Not a resource kind.** Making the identity provider a `Resource` would be circular: resolving a resource requires a token, so you cannot make the issuer of tokens a thing that must itself be resolved under token auth. §7 keeps the Auth Server a **component** precisely so it sits outside the resource graph as the root of trust. The four kinds (§4.2) stay four.
-
-### 10.2 Provider-side enforcement (extends spec §7.4, §8, §9.2)
-
-Spec v0.1 puts tier, authorization and audit in the **Executor**: the CLI or a browser doax-app. An executor runs on the caller's device, so whoever controls the device controls the check: a browser can be edited, a CLI run with `--yes`. That is acceptable for reads of public data and not for writes to a system of record.
-
-- A **Provider** is the service a resource's package calls, operated by (or for) the namespace owner. A namespace MAY declare its Providers (registry configuration: `provider name → service identity`).
-- A Provider MUST, on every invocation it serves: verify the caller's token (§10.4), map the request to `(resource, operation)`, apply the resource's declared tier from a manifest it trusts (its own published manifest, pinned by digest), require an approval (§10.3) where the effective tier is 2 or stronger, and emit the audit event itself.
-- **Audit authority.** Events a Provider delivers with its service identity are **authoritative**; events delivered by executors are kept but are **claims** about the caller's device. The audit store records which (`source: provider | registry | ingest`, plus who delivered it).
-- A Provider that cannot deliver MUST NOT drop the event: it falls back to a durable local log from which it is redelivered (spec §8.2 applied to Providers). Redelivery is idempotent by event id.
-
-### 10.3 Approval artifact (extends spec §6.4, §7.3 Tier 2)
-
-Tier 2 "per-call authorization" needs a thing the Provider can check. An approval binds **one human decision to one exact request**:
-
-1. On `dry-run`, the Provider computes the **request hash** — `sha256` of the canonical JSON (keys sorted recursively, no whitespace) of `{resource: "@ns/name", operation: "execute", input: <the normalized input>}` — and asks the registry for an approval: `POST /approvals {resource, operation, requestHash, requestedFor, summary}`. Only a Provider may ask, so the summary a person approves is the Provider's, not the agent's.
-2. The registry returns an approval id and a page. The person named in `requestedFor` opens it and decides with a **fresh interactive sign-in** (an IdP credential minted moments ago, not a registry token, so an agent holding the token cannot decide). The registry records an `approve` or `reject` event (§8.3).
-3. On `execute`, the caller passes the approval id. The Provider fetches the approval from the registry with its own identity and receives a **signed approval token** `{typ: "doax-approval", jti: <approval id>, sub: <approver>, res, op, req: <request hash>, aud: <provider>, exp}`. It accepts only if the signature, audience, resource, operation and request hash match the request in hand, the approver is the actor, and the approval has not been used: **single use**, enforced by the Provider. A retry with a used approval returns the first result, which makes the approval the idempotency key.
-
-The agent can prepare everything; only the person can make it happen. This is §4 of this document (a virtualized agent must escalate, never click consent) made checkable.
-
-### 10.4 Audience-scoped tokens (extends spec §7.2)
-
-A §7.2 token names namespaces but not where it may be presented, so a token accepted by one Provider is accepted by every Provider that trusts the same issuer. Tokens carry an **audience** (`aud`): `registry` for the registry itself, a Provider name otherwise. The registry refuses Provider tokens; a Provider refuses everything but its own audience.
-
-- An executor obtains a Provider token by **exchange**: `POST /auth/exchange {audience}` with a registry token, typically inside the Provider's Authenticator (`authenticate` exchanges, `refresh` exchanges again).
-- A web portal signs in through its Provider's **sign-in authenticator**: an `authenticator` resource in the Provider's namespace (e.g. `@fadmin/signin`, interaction `redirect`) whose manifest declares `authentication.signin: {audience, returnOrigins}`, with `audience` = the namespace. The portal navigates to the registry's page `/signin/@ns/name?return=<portal URL>`; the person signs in there; the registry returns a Provider token in the URL fragment, only to a listed origin. The portal page holds no IdP client of its own, and every sign-in happens on the registry's pages. This is a **portal session**, not a registry session: the registry refuses it and it cannot be exchanged; it serves only the portal's reads and actions at its Provider.
-- Provider tokens are short-lived (hours); registry tokens stay long-lived (days). A token records the **channel** it was issued for (`chn: web | executor`) and **how** (`ath`: the sign-in authenticator, or `registry:exchange`). A Provider accepts its audience only as issued by the ways it expects (web from its sign-in authenticator, executor from exchange) and copies both into its audit events.
-
-The §7.2 rule stands: no per-resource permissions in the token. The audience says where; the Provider still decides what.
-
-### 10.5 Out-of-band payloads (extends spec §6, §8.4)
-
-Bulk data (ledgers past 100 MB) does not pass through an action invocation. The action covers the control steps — issuing an upload ticket, finishing it — and the bytes travel to storage over a short-lived signed URL. The `execute` event records the payload's size and digest as the Provider observed them, so the audit names exactly which bytes the action filed.
-
-### 10.6 Web as an execution location (extends spec §8.4)
-
-A Provider serving a web portal records `executionLocation: {kind: "web", app: <portal>}`; through an executor it records what the token's channel says. Portal use and agent use then appear side by side in one audit log, under the same resources.
 
 ---
 
