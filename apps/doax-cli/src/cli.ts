@@ -51,7 +51,9 @@ Usage:
     doax publish <manifest.json> <package-file>  Publish a resource (identity comes from the manifest;
                                               @global accepts anyone logged in, other namespaces need a role)
     doax login [--email <you@x>] [--code <6 digits>] [--token <pat>] [--registry <url>]
-                                              Sign in: email gets a code, code gets a token; or store a token directly
+    doax login --web [--registry <url>] [--no-browser] [--timeout <seconds>]
+                                              Sign in: email gets a code, code gets a token; store a token directly; or
+                                              --web opens the registry's sign-in page and catches the token on loopback
     doax logout [--registry <url>]            Drop the stored token
     doax whoami                               Show your principal and namespaces
     doax audit [--class <c>] [--actor <a>] [--resource <@ns/name>] [--since <iso>] [--limit <n>]
@@ -84,6 +86,8 @@ export interface CliDeps {
     fetch: typeof fetch;
     home?: string;
     prompt?: (question: string) => Promise<string>;
+    /** Opens a URL in the caller's browser (web login); absent or a no-op leaves only the printed URL. */
+    openUrl?: (url: string) => void | Promise<void>;
 }
 
 const defaultPrompt = async (question: string): Promise<string> => {
@@ -95,11 +99,25 @@ const defaultPrompt = async (question: string): Promise<string> => {
     }
 };
 
+/** Fire-and-forget: hand the URL to the platform's browser opener. The URL is always printed too. */
+function openInBrowser(url: string): void {
+    const command = process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open";
+    const args = process.platform === "win32" ? ["/c", "start", "", url] : [url];
+    void import("node:child_process").then(({ spawn }) => {
+        const child = spawn(command, args, { stdio: "ignore", detached: true });
+        child.on("error", () => {
+            /* no opener on this machine — the printed URL is the fallback */
+        });
+        child.unref();
+    });
+}
+
 const defaultDeps = (): CliDeps => ({
     config: loadCliConfig(process.env),
     fetch: globalThis.fetch,
     home: join(homedir(), ".doax"),
     prompt: process.stdin.isTTY && process.env.DOAX_NO_INPUT !== "1" ? defaultPrompt : undefined,
+    openUrl: openInBrowser,
 });
 
 const executorDeps = (deps: CliDeps): ExecutorDeps => ({
@@ -135,6 +153,9 @@ export async function run(argv: string[], deps: CliDeps = defaultDeps()): Promis
             registry: { type: "string" },
             email: { type: "string" },
             code: { type: "string" },
+            web: { type: "boolean" },
+            "no-browser": { type: "boolean" },
+            timeout: { type: "string" },
         },
         allowPositionals: true,
         strict: false,
@@ -298,10 +319,108 @@ async function publishCmd(deps: CliDeps, rest: string[], json: boolean): Promise
     };
 }
 
+/**
+  * Web sign-in (spec §10.2). Discover the registry's login methods, then catch the token on a
+  * loopback listener: the browser opens the registry's own sign-in page, which form-POSTs the
+  * token back to 127.0.0.1. `state` (32 CSPRNG bytes) binds the response to this run.
+  */
+async function webLoginToken(deps: CliDeps, origin: string, values: Record<string, unknown>): Promise<string> {
+    const { createServer } = await import("node:http");
+    const { randomBytes } = await import("node:crypto");
+
+    // A registry that does not answer /auth/methods offers only email+token, as v0.1 registries do.
+    let methods: string[] = ["email", "token"];
+    let loginPath: string | undefined;
+    try {
+        const res = await deps.fetch(`${origin}/auth/methods`);
+        if (res.ok) {
+            const body = (await res.json()) as { methods?: string[]; web?: { login?: string } };
+            if (Array.isArray(body.methods)) methods = body.methods;
+            loginPath = body.web?.login;
+        }
+    } catch {
+        /* /auth/methods unreachable — keep the v0.1 default */
+    }
+    if (!methods.includes("web") || !loginPath) {
+        throw new ExecutorError(`${origin} does not offer web login`, "unsupported", {
+            fix: `methods offered: ${methods.join(", ")}; use doax login --email or --token`,
+        });
+    }
+
+    const state = randomBytes(32).toString("base64url");
+    const path = `/${randomBytes(16).toString("hex")}`;
+    const timeoutMs = Math.max(1, Number(values.timeout) || 300) * 1000;
+
+    return await new Promise<string>((resolve, reject) => {
+        const server = createServer((req, res) => {
+            const url = new URL(req.url ?? "/", "http://127.0.0.1");
+            if (req.method !== "POST" || url.pathname !== path) {
+                res.writeHead(400).end("bad request");
+                return;
+            }
+            let raw = "";
+            req.on("data", (chunk) => {
+                raw += chunk;
+                if (raw.length > 8192) req.destroy();
+            });
+            req.on("end", () => {
+                const form = new URLSearchParams(raw);
+                const got = form.get("token");
+                if (form.get("state") !== state || !got) {
+                    res.writeHead(400).end("bad request");
+                    return;
+                }
+                res.writeHead(200, { "content-type": "text/html" }).end(
+                    "<!doctype html><p>Signed in to doax. You can close this tab.</p>",
+                );
+                cleanup();
+                resolve(got);
+            });
+        });
+        const timer = setTimeout(() => {
+            cleanup();
+            reject(
+                new ExecutorError(`web login timed out after ${Math.round(timeoutMs / 1000)}s`, "timeout", {
+                    fix: `open ${origin}${loginPath} without a callback, then run doax login --token`,
+                }),
+            );
+        }, timeoutMs);
+        function cleanup() {
+            clearTimeout(timer);
+            server.close();
+        }
+        server.on("error", (err) => {
+            cleanup();
+            reject(new ExecutorError(`web login listener failed: ${err.message}`, "io"));
+        });
+        server.listen(0, "127.0.0.1", async () => {
+            const addr = server.address() as { port: number };
+            const callback = `http://127.0.0.1:${addr.port}${path}`;
+            const loginUrl = `${origin}${loginPath}?callback=${encodeURIComponent(callback)}&state=${encodeURIComponent(state)}`;
+            process.stderr.write(`opening ${loginUrl}\n`);
+            if (!values["no-browser"] && deps.openUrl) {
+                try {
+                    await deps.openUrl(loginUrl);
+                } catch {
+                    /* no browser — the printed URL is the fallback */
+                }
+            }
+        });
+    });
+}
+
 async function loginCmd(deps: CliDeps, values: Record<string, unknown>, json: boolean): Promise<CliResult> {
     const xdeps = executorDeps(deps);
     const origin = ((values.registry as string | undefined) ?? readRegistryMap(xdeps).default).replace(/\/+$/, "");
     let token = values.token as string | undefined;
+
+    // Web sign-in (spec §10.2): the registry's own login page hands the token back on a loopback redirect.
+    if (values.web) {
+        if (values.email || values.code || values.token) {
+            return { exitCode: 2, stderr: "doax login: --web cannot be combined with --email, --code, or --token" };
+        }
+        token = await webLoginToken(deps, origin, values);
+    }
 
     // Email sign-in: request a code, verify it, receive the token.
     let email = values.email as string | undefined;

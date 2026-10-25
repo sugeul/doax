@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { type CliDeps, run, VERSION } from "./cli.ts";
 
@@ -48,5 +51,57 @@ describe("doax cli", () => {
 
     it("rejects unknown commands", async () => {
         expect((await run(["frobnicate"])).exitCode).toBe(2);
+    });
+
+    it("logs in via --web by catching the token on a loopback callback", async () => {
+        const home = mkdtempSync(join(tmpdir(), "doax-web-"));
+        try {
+            const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+                const url = String(input);
+                if (url.endsWith("/auth/methods")) return Response.json({ methods: ["web", "token"], web: { login: "/auth/login" } });
+                if (url.endsWith("/whoami")) {
+                    expect((init?.headers as Record<string, string>).authorization).toBe("Bearer doax_pat_web");
+                    return Response.json({ principal: "alice@example.com", namespaces: ["@alice"] });
+                }
+                throw new Error(`unexpected fetch ${url}`);
+            }) as typeof fetch;
+            const openUrl = async (loginUrl: string) => {
+                const u = new URL(loginUrl);
+                await fetch(u.searchParams.get("callback")!, {
+                    method: "POST",
+                    headers: { "content-type": "application/x-www-form-urlencoded" },
+                    body: new URLSearchParams({ token: "doax_pat_web", state: u.searchParams.get("state")! }),
+                });
+            };
+            const result = await run(["login", "--web", "--registry", "https://registry.test", "--json"], {
+                config: { registry: "https://registry.test" },
+                fetch: fetchImpl,
+                home,
+                openUrl,
+            });
+            expect(result.exitCode).toBe(0);
+            expect(JSON.parse(result.stdout!)).toMatchObject({ ok: true, principal: "alice@example.com", registry: "https://registry.test" });
+        } finally {
+            rmSync(home, { recursive: true, force: true });
+        }
+    });
+
+    it("reports when the registry does not offer web login", async () => {
+        const fetchImpl = (async (input: string | URL | Request) => {
+            if (String(input).endsWith("/auth/methods")) return new Response("not found", { status: 404 });
+            throw new Error("unexpected fetch");
+        }) as typeof fetch;
+        const result = await run(["login", "--web", "--registry", "https://registry.test"], deps(fetchImpl));
+        expect(result.exitCode).toBe(1);
+        expect(result.stderr).toContain("does not offer web login");
+    });
+
+    it("rejects --web combined with --token", async () => {
+        const fetchImpl = (async () => {
+            throw new Error("no fetch expected");
+        }) as typeof fetch;
+        const result = await run(["login", "--web", "--token", "x", "--registry", "https://registry.test"], deps(fetchImpl));
+        expect(result.exitCode).toBe(2);
+        expect(result.stderr).toContain("cannot be combined");
     });
 });
