@@ -2,11 +2,11 @@
 
 # doax
 
-**Day One AX** — the registry of data and action resources that AI agents use on behalf of a human.
+**Delegated Operation, Attested eXecution** — the registry of data and action resources that AI agents use on behalf of a human.
 
 Resolve · verify · tier · invoke · audit. Like npm, but for what an agent is allowed to do.
 
-[doax.io](https://doax.io) · [registry.doax.io](https://registry.doax.io) · [app.doax.io](https://app.doax.io) · [spec](docs/spec/registry-v0.1.md)
+[doax.io](https://doax.io) · [registry.doax.io](https://registry.doax.io) · [app.doax.io](https://app.doax.io) · [manifesto](https://doax.io/doax-manifesto) · [spec](docs/spec/registry-v0.1.md)
 
 </div>
 
@@ -41,7 +41,7 @@ Every Resource is one of four kinds — **data-source**, **action**, **executor*
 
 - **Tiered** (1–4): the authentication a resource demands can be strengthened downstream, never weakened.
 - **Audited**: every resolve, read, dry-run, and execute is an append-only event — who, what, at which tier, what happened.
-- **Integrity-checked**: the executor refuses to run a package whose digest doesn't match the manifest.
+- **Integrity-checked**: the doax interface refuses to run a package whose digest doesn't match the manifest.
 - **Namespaced**: a namespace is self-serve (sign in with email, claim it), owned and governed by whoever claims it; `@global` is open to anyone signed in.
 
 The full guarantees are in the spec: [docs/spec/registry-v0.1.md](docs/spec/registry-v0.1.md). [docs/architecture.md](docs/architecture.md) records the product decisions on top of it and where they currently diverge from spec v0.1 (§10 there).
@@ -69,7 +69,7 @@ Being direct about this on purpose:
 | `apps/auth-server` | `@doax/auth-server` | Auth Server (spec §7): offline-verifiable tokens, login delegated to OIDC (Google by default) |
 | `apps/doax-server` | `doax-server` (bin `doax-server`) | Composes the three above into one process under one hostname — the on-premise deployable, and the source of `src/lambda.ts`, the handler actually running on registry.doax.io |
 | `apps/executor-host` | `@doax/executor-host` | Executor Resource (spec §6A): an organization-operated machine that runs `trusted-executor` work — scaffold only |
-| `apps/doax-cli` | `doax-cli` (bin `doax`) | Executor CLI (spec §9): runs on the caller's device; resolves, authenticates, invokes and audits resources |
+| `apps/doax-cli` | `doax-cli` (bin `doax`) | Developer CLI: search, try, publish and audit resources from your device, through the doax interface (spec §9) |
 | `infra/terraform` | — | The AWS stack behind doax.io, registry.doax.io, app.doax.io: Lambda, API Gateway, Aurora, S3, CloudFront, SES, CloudWatch |
 | `infra/site`, `infra/apps-landing` | — | Source for the public site and the app-provider landing page |
 | `infra/seed` | — | The published `@doax/slack-*` and `@global/web-fetch` resources, as a worked example of a real package |

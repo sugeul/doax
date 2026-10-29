@@ -29,7 +29,7 @@ import {
 
 export const VERSION = "0.3.0";
 
-const USAGE = `doax ${VERSION} — Executor CLI for the doax registry
+const USAGE = `doax ${VERSION} — developer CLI for doax (Delegated Operation, Attested eXecution)
 
 Usage:
     doax status                               Show the registry this CLI talks to and whether it answers

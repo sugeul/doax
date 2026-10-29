@@ -75,6 +75,7 @@
   }
   .cta:hover { filter: brightness(1.07); }
   @media (max-width: 760px){ .tab span, .nav-right .ghost { display: none; } }
+  @media (max-width: 1180px){ .brand small { display: none; } }
 
   /* ---------- scrollytelling scene ---------- */
   #scene { position: relative; height: 680vh; }
@@ -197,7 +198,7 @@
 <div class="progress" id="progress"></div>
 <header class="nav">
   <div class="wrap nav-in">
-    <a class="brand" href="#" id="brandHome"><span class="ring" aria-hidden="true"></span> doax <small>Day One AX</small></a>
+    <a class="brand" href="#" id="brandHome"><span class="ring" aria-hidden="true"></span> doax <small>Delegated Operation, Attested eXecution</small></a>
     <nav class="tabs" role="tablist" aria-label="Primary">
       <button class="tab" role="tab" id="tab-home" aria-selected="true" aria-controls="view-home"><span class="k" aria-hidden="true"></span>Home</button>
       <button class="tab" role="tab" id="tab-search" aria-selected="false" aria-controls="view-search">Search<span>&nbsp;the registry</span></button>
@@ -205,6 +206,7 @@
     <div class="nav-right">
       <a class="ghost" href="#demo">Demo</a>
       <a class="ghost" href="/playbook">Playbooks</a>
+      <a class="ghost" href="/doax-manifesto">Manifesto</a>
       <a class="ghost" href="/install">Install CLI</a>
       <a class="ghost" href="https://registry.doax.io" target="_blank" rel="noopener">registry.doax.io ↗</a>
       <button class="cta" id="getStarted">Get started</button>
@@ -255,7 +257,7 @@
             <div class="cta-row" style="margin-top:26px;pointer-events:auto;">
               <a class="cta" href="#install" style="text-decoration:none;">Install the CLI</a>
               <button class="ghost" id="heroSearch">Search the catalog</button>
-              <a class="ghost" href="https://registry.doax.io/manifesto.json" target="_blank" rel="noopener">Manifesto ↗</a>
+              <a class="ghost" href="/doax-manifesto">Manifesto</a>
             </div>
           </div></div>
         </article>
@@ -286,7 +288,7 @@
       <div class="sec-head">
         <span class="eyebrow">Install · one line</span>
         <h2>Get the CLI. Use a resource in five minutes.</h2>
-        <p>The <span class="mono">doax</span> CLI is the executor: it resolves resources, verifies integrity, runs the authentication tier each resource demands, and records every access in the audit log. Linux or macOS, Node ≥ 20, nothing else.</p>
+        <p>The <span class="mono">doax</span> CLI is the developer's tool: search the catalog, try resources, publish and audit. In production your agent, web app or program is the executor, and calls resources through the doax interface, which verifies integrity, applies the tier each resource demands, and records every access in the audit log. Linux or macOS, Node ≥ 20, nothing else.</p>
       </div>
       <div class="cmd" id="installCmd">
         <span class="p">$</span>
@@ -396,7 +398,8 @@
       <a href="#demo" id="footDemo">Demo</a>
       <a href="/install">Install the CLI</a>
       <a href="https://registry.doax.io" target="_blank" rel="noopener">Registry API ↗</a>
-      <a href="https://registry.doax.io/manifesto.json" target="_blank" rel="noopener">Manifesto ↗</a>
+      <a href="/doax-manifesto">Manifesto</a>
+      <a href="https://registry.doax.io/manifesto.json" target="_blank" rel="noopener">manifesto.json ↗</a>
     </div>
   </div>
 </footer>

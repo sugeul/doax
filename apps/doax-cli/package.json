@@ -1,7 +1,7 @@
 {
     "name": "doax-cli",
     "version": "0.1.0",
-    "description": "doax Executor CLI: resolve, authenticate, run and audit registry resources from your device.",
+    "description": "doax developer CLI (Delegated Operation, Attested eXecution): search, try, publish and audit registry resources from your device.",
     "license": "UNLICENSED",
     "type": "module",
     "bin": {

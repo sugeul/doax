@@ -2,6 +2,8 @@
 # Builds everything the doax.io website bucket serves:
 #   index.html   — the landing page (infra/site/doax-site.html wrapped in a document shell)
 #   install.html — the CLI install guide (served at /install)
+#   doax-manifesto.html — the human-readable manifesto (served at /doax-manifesto)
+#   doax-manifesto-ko.html — its Korean edition (served at /doax-manifesto-ko)
 #   install.sh   — the one-liner installer (Linux/macOS)
 #   install.ps1  — the one-liner installer (Windows PowerShell)
 #   doax.ps1     — the Windows launcher install.ps1 puts on PATH
@@ -19,6 +21,8 @@ mkdir -p "$OUT/cli"
 } > "$OUT/index.html"
 
 cp "$ROOT/infra/site/install.html" "$OUT/install.html"
+cp "$ROOT/infra/site/doax-manifesto.html" "$OUT/doax-manifesto.html"
+cp "$ROOT/infra/site/doax-manifesto-ko.html" "$OUT/doax-manifesto-ko.html"
 cp "$ROOT/infra/site/install.sh" "$OUT/install.sh"
 cp "$ROOT/infra/site/install.ps1" "$OUT/install.ps1"
 cp "$ROOT/infra/site/doax.ps1" "$OUT/doax.ps1"

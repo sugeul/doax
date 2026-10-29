@@ -1,0 +1,382 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="doax 매니페스토 — Delegated Operation, Attested eXecution. AI 에이전트가 사람을 대신해 일하는 범위를 정하고, 모든 실행을 기록으로 증명합니다.">
+<title>doax 매니페스토</title>
+<style>
+    :root {
+        --bg: #04070e; --surface: #0b1220; --surface-2: #0f1828;
+        --ink: #eaf1fb; --muted: #91a4c2; --faint: #5c7097; --line: #182438;
+        --accent: #37e6d0; --accent-2: #4f8dff; --accent-ink: #022421;
+        --glow: rgba(55,230,208,.5);
+        --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+        --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", Roboto, Helvetica, Arial, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+        margin: 0; color: var(--ink); font-family: var(--sans); line-height: 1.75;
+        background: radial-gradient(120% 90% at 70% 0%, #0a1426 0%, #05080f 48%, #03050b 100%) fixed;
+        -webkit-font-smoothing: antialiased; word-break: keep-all; overflow-wrap: break-word;
+    }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    ::selection { background: var(--accent); color: var(--accent-ink); }
+    .wrap { max-width: 820px; margin-inline: auto; padding: 0 24px 90px; }
+    header { display: flex; align-items: center; gap: 12px; padding: 26px 0 0; }
+    .ring {
+        width: 22px; height: 22px; border-radius: 50%;
+        background: conic-gradient(from 210deg, var(--accent), var(--accent-2), var(--accent));
+        box-shadow: 0 0 16px var(--glow);
+        mask: radial-gradient(circle at 50% 50%, transparent 54%, #000 56%);
+        -webkit-mask: radial-gradient(circle at 50% 50%, transparent 54%, #000 56%);
+    }
+    header .brand { font-weight: 700; font-size: 17px; color: var(--ink); }
+    header .brand:hover { text-decoration: none; }
+    header nav { margin-left: auto; display: flex; gap: 18px; font-size: 13.5px; }
+    h1 { font-size: clamp(30px, 5vw, 44px); letter-spacing: -.02em; line-height: 1.15; margin: 54px 0 0; text-wrap: balance; }
+    .lede { color: var(--muted); font-size: 17px; margin-top: 14px; max-width: 60ch; }
+    .acronym { font-family: var(--mono); font-size: 15px; color: var(--ink); margin-top: 22px; letter-spacing: .02em; }
+    .acronym b { color: var(--accent); font-weight: 700; }
+    h2 { font-size: 15px; letter-spacing: .12em; font-family: var(--mono); color: var(--accent); margin: 60px 0 14px; font-weight: 600; scroll-margin-top: 20px; }
+    h3 { font-size: 16px; margin: 26px 0 6px; color: var(--ink); }
+    p, li { color: var(--muted); }
+    p { margin: 10px 0; }
+    ul { padding-left: 20px; margin: 10px 0; }
+    ul li { margin: 6px 0; }
+    strong { color: var(--ink); font-weight: 600; }
+    code { font-family: var(--mono); font-size: .9em; color: var(--ink); background: var(--surface-2); border: 1px solid var(--line); border-radius: 6px; padding: 1px 6px; word-break: normal; }
+    pre {
+        font-family: var(--mono); font-size: 13.5px; line-height: 1.7; color: var(--ink);
+        background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+        padding: 16px 18px; overflow-x: auto; margin: 14px 0;
+    }
+    pre .c { color: var(--faint); }
+    pre .p { color: var(--accent); user-select: none; }
+    .note { border-left: 2px solid var(--accent-2); padding: 2px 0 2px 14px; margin: 16px 0; color: var(--muted); font-size: 14.5px; }
+    .toc { margin: 30px 0 0; padding: 16px 20px; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; columns: 2 220px; column-gap: 28px; font-size: 14px; }
+    .toc a { display: block; color: var(--muted); padding: 3px 0; break-inside: avoid; }
+    .toc a span { font-family: var(--mono); color: var(--faint); margin-right: 8px; }
+    .pillars { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px; margin: 18px 0; }
+    .pillar { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; }
+    .pillar h3 { margin: 0 0 6px; }
+    .pillar p { margin: 0; font-size: 14.5px; }
+    ol.principles { padding-left: 0; list-style: none; counter-reset: p; margin: 14px 0; }
+    ol.principles li { counter-increment: p; position: relative; padding: 14px 0 14px 46px; border-bottom: 1px solid var(--line); margin: 0; }
+    ol.principles li::before {
+        content: counter(p, decimal-leading-zero); position: absolute; left: 0; top: 15px;
+        font-family: var(--mono); font-size: 13px; color: var(--accent);
+    }
+    ol.principles li strong { display: block; margin-bottom: 2px; }
+    .table-scroll { overflow-x: auto; margin: 14px 0; }
+    table { border-collapse: collapse; width: 100%; font-size: 14px; }
+    th, td { text-align: left; padding: 9px 14px 9px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+    th { color: var(--faint); font-family: var(--mono); font-size: 11px; letter-spacing: .08em; font-weight: 500; }
+    td { color: var(--muted); }
+    td:first-child { color: var(--ink); white-space: nowrap; }
+    td code { white-space: nowrap; }
+    .diagram { margin: 20px 0; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
+    .diagram svg { display: block; width: 100%; height: auto; }
+    .live { color: var(--accent); }
+    footer { margin-top: 70px; padding-top: 22px; border-top: 1px solid var(--line); color: var(--faint); font-size: 13.5px; display: flex; gap: 22px; flex-wrap: wrap; }
+    footer a { color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+    <header>
+        <span class="ring" aria-hidden="true"></span>
+        <a class="brand" href="/">doax</a>
+        <nav>
+            <a href="/">홈</a>
+            <a href="/install">설치</a>
+            <a href="/doax-manifesto" hreflang="en" lang="en">English</a>
+        </nav>
+    </header>
+
+    <h1>doax 매니페스토</h1>
+    <p class="acronym"><b>D</b>elegated <b>O</b>peration, <b>A</b>ttested e<b>X</b>ecution</p>
+    <p class="lede">
+        위임된 작업, 증명된 실행. doax는 AI 에이전트가 사람을 대신해 쓰는 데이터·액션 리소스의 레지스트리입니다.
+        에이전트는 위임받은 범위 안에서만 움직이고, doax는 그 움직임을 빠짐없이 기록합니다.
+        npm과 비슷하지만, doax가 다루는 것은 패키지가 아니라 에이전트에게 허락된 일입니다.
+        리소스를 찾고(resolve), 검증하고(verify), 등급을 맞춘 뒤(tier) 실행하고(invoke), 그 과정을 기록합니다(audit).
+    </p>
+
+    <nav class="toc" aria-label="목차">
+        <a href="#why"><span>01</span>역할만으로 부족한 이유</a>
+        <a href="#principles"><span>02</span>원칙</a>
+        <a href="#resources"><span>03</span>리소스</a>
+        <a href="#authentication"><span>04</span>인증과 등급(Tier)</a>
+        <a href="#audit"><span>05</span>감사와 무결성</a>
+        <a href="#architecture"><span>06</span>아키텍처</a>
+        <a href="#cli"><span>07</span>개발자 CLI</a>
+        <a href="#publishing"><span>08</span>리소스 배포</a>
+        <a href="#catalog"><span>09</span>지금 쓸 수 있는 리소스</a>
+        <a href="#deployment"><span>10</span>제공 방식과 진행 상황</a>
+        <a href="#machine-readable"><span>11</span>기계용 매니페스토</a>
+    </nav>
+
+    <h2 id="why">역할만으로 부족한 이유</h2>
+    <p>
+        역할기반 접근제어(RBAC)는 '누가 무엇을 할 수 있는가' 하나만을 설명합니다.
+        doax도 이 틀을 그대로 따릅니다. 네임스페이스 소유자와 퍼블리셔가 배포할 리소스를 정하고,
+        토큰에는 사용자가 접근할 수 있는 네임스페이스를 담습니다.
+        하지만 에이전트가 사람을 대신해 일하기 시작하면 질문이 두 가지 더 생기고, RBAC는 어느 쪽에도 답하지 못합니다.
+    </p>
+    <div class="pillars">
+        <div class="pillar">
+            <h3>위임 (Delegation)</h3>
+            <p>사람이 에이전트에게 어떤 일을, 어디까지 맡길지 정합니다. 에이전트는 맡긴 사람의 이름으로 일하지만, 리소스가 허용한 작업만 할 수 있고 리소스가 요구하는 인증 등급을 충족해야 합니다. Tier 1 리소스는 매번 사람이 직접 로그인하거나 동의해야 합니다.</p>
+        </div>
+        <div class="pillar">
+            <h3>증명 (Attestation)</h3>
+            <p>실제로 무엇이 실행됐는지 증거를 남깁니다. 실행 전에는 패키지 다이제스트를 확인하고, 실행 후에는 누가 어떤 버전을 어떤 등급으로 실행했고 결과가 어땠는지를 지울 수 없는 기록으로 남깁니다.</p>
+        </div>
+    </div>
+
+    <h2 id="principles">원칙</h2>
+    <ol class="principles">
+        <li><strong>위임의 범위는 에이전트가 아니라 리소스가 정한다.</strong>리소스마다 호출할 수 있는 작업이 정해져 있고, 그 밖의 작업은 호출할 수 없습니다. 내부 코드나 MCP 서버가 다른 기능을 제공하더라도 마찬가지입니다.</li>
+        <li><strong>등급은 올릴 수만 있다.</strong>네임스페이스, 의존 리소스, 인증자는 물론 실행 중인 리소스 자신도 더 높은 등급을 요구할 수 있습니다. 반대로 등급을 낮출 수 있는 주체는 없습니다.</li>
+        <li><strong>Tier 1 동의는 사람만 할 수 있다.</strong>Tier 2~4에서는 에이전트가 스스로 다시 로그인해도 됩니다. 하지만 Tier 1 작업까지 에이전트가 승인한다면 Tier 1을 둔 의미가 없습니다.</li>
+        <li><strong>모든 실행을 기록으로 증명한다.</strong>리졸브, 패키지 다운로드, 읽기, 드라이런, 실행, 로그인을 하나도 빠짐없이 감사 이벤트로 기록합니다. 한 번 남긴 기록은 고치거나 지울 수 없습니다. 바로잡을 때도 원래 기록은 그대로 두고, 그 기록을 가리키는 새 기록을 덧붙입니다.</li>
+        <li><strong>실행 전에 무결성부터 확인한다.</strong>매니페스트에는 배포 시점에 계산한 패키지 다이제스트가 들어 있습니다. 내려받은 패키지의 다이제스트가 이 값과 다르면 실행하지 않습니다.</li>
+        <li><strong>자격 증명은 실행하는 기기 밖으로 나가지 않는다.</strong>Slack, Google, ERP 같은 대상 시스템의 로그인 정보는 리소스를 실행하는 기기에만 저장합니다. 레지스트리, 코드 저장소, 인증 서버로는 보내지 않습니다.</li>
+        <li><strong>배포한 버전은 바뀌지 않는다.</strong>한 번 배포한 버전은 고칠 수도, 지울 수도 없습니다. 그래서 감사 기록에 남은 실행을 언제든 같은 조건으로 재현할 수 있습니다.</li>
+        <li><strong>공개 여부와 신뢰는 별개다.</strong>누가 리소스를 볼 수 있는지와 리소스가 검토를 통과했는지는 서로 다른 문제입니다. doax는 둘을 항상 따로 표시합니다.</li>
+        <li><strong>리소스는 실패하는 방식을 미리 밝힌다.</strong>모든 매니페스트에는 예상 장애 목록이 있습니다. 실패는 괜찮지만, 목록에 없는 방식으로 실패해서는 안 됩니다.</li>
+    </ol>
+
+    <h2 id="resources">리소스</h2>
+    <p>
+        doax가 다루는 대상은 모두 <strong>리소스</strong>입니다. 리소스의 이름은 <code>@namespace/name@version</code> 형식이고,
+        리소스마다 자신을 설명하는 JSON <strong>매니페스트</strong>와 실제로 실행되는 코드인 <strong>패키지</strong>가 있습니다.
+        리소스는 네 종류이며, 종류마다 호출할 수 있는 작업이 정해져 있습니다.
+    </p>
+    <div class="table-scroll"><table>
+        <tr><th>종류</th><th>설명</th><th>작업</th></tr>
+        <tr><td>data-source</td><td>에이전트가 읽는 레코드 컬렉션 하나</td><td><code>describe</code> <code>metadata</code> <code>read</code></td></tr>
+        <tr><td>action</td><td>외부 시스템에 변화를 일으키는 작업</td><td><code>describe</code> <code>dry-run</code> <code>execute</code></td></tr>
+        <tr><td>authenticator</td><td>Slack, Google, Microsoft 같은 대상 시스템 하나에 로그인하는 방법</td><td><code>describe</code> <code>authenticate</code></td></tr>
+        <tr><td>executor</td><td>작업이 실행되는 장소 (예: 조직이 운영하는 서버)</td><td><code>describe</code> <code>capabilities</code> <code>dispatch</code></td></tr>
+    </table></div>
+    <ul>
+        <li><strong>고정 인터페이스(Fixed Interface).</strong> doax는 종류별로 정해진 작업으로만 리소스를 호출합니다. 패키지는 직접 작성한 코드일 수도, MCP 서버일 수도 있습니다. 다만 MCP 도구는 매니페스트에서 이 작업들과 연결한 것만 호출할 수 있습니다. 실행 중에 새 도구를 찾아 리소스가 할 수 있는 일을 늘릴 수는 없습니다.</li>
+        <li><strong>매니페스트.</strong> 버전마다 하나씩 있는 JSON 문서입니다. 요약, 설명, 소유자, 요구 등급, 실행 위치, 인증자, 의존 리소스, 감사 범위, 패키지 다이제스트, 그리고 예상 장애를 포함한 서비스 수준을 담습니다.</li>
+        <li><strong>불변성.</strong> 배포한 버전은 고칠 수도, 지울 수도 없습니다. 대신 <em>deprecated</em>나 <em>yanked</em>로 표시할 수 있습니다. deprecated 버전은 경고와 함께 계속 쓸 수 있습니다. yanked 버전은 검색과 "latest" 조회에서 빠지지만, 버전을 정확히 지정하면 여전히 불러올 수 있습니다.</li>
+        <li><strong>네임스페이스.</strong> 이메일로 로그인한 뒤 원하는 이름을 직접 등록할 수 있고, 등록한 사람이 소유자로서 관리합니다. <code>@global</code>은 로그인한 사람이라면 누구나 쓸 수 있고, 공식 어댑터는 <code>@doax</code>에 있습니다.</li>
+        <li><strong>공개 범위와 검증 상태.</strong> 공개 범위(<code>public</code>, <code>namespace-only</code>, <code>grant-list</code>)는 누가 리소스를 볼 수 있는지를, 검증 상태(<code>unverified</code>, <code>under-review</code>, <code>verified</code>, <code>rejected</code>)는 리소스가 검토를 통과했는지를 나타냅니다. doax는 어느 한쪽을 다른 쪽의 근거로 내세우지 않습니다.</li>
+    </ul>
+
+    <h2 id="authentication">인증과 등급(Tier)</h2>
+    <p>리소스는 저마다 요구하는 최소 <strong>등급</strong>을 선언합니다. Tier 1이 가장 엄격하고 Tier 4가 가장 느슨합니다.</p>
+    <div class="table-scroll"><table>
+        <tr><th>등급</th><th>이름</th><th>호출 시 동작</th></tr>
+        <tr><td>1</td><td>대화형 인증</td><td>호출할 때마다 사람이 직접 로그인하거나 동의합니다.</td></tr>
+        <tr><td>2</td><td>장기 토큰 + 호출별 권한 확인</td><td>토큰으로 신원을 확인한 뒤, 이번 호출을 허용할지 한 번 더 확인합니다.</td></tr>
+        <tr><td>3</td><td>장기 토큰만 확인</td><td>토큰만 유효하면 됩니다. 감사 기록이 유일한 통제 수단입니다.</td></tr>
+        <tr><td>4</td><td>인증 없음</td><td>로그인이 필요 없습니다. 그래도 감사 기록은 익명 사용자 이름으로 남깁니다.</td></tr>
+    </table></div>
+    <p>호출에 실제로 적용되는 등급을 <strong>실효 등급(effective tier)</strong>이라고 합니다. 실효 등급은 다음 가운데 가장 엄격한 등급으로 정해집니다.</p>
+    <ul>
+        <li>네임스페이스가 정한 하한</li>
+        <li>리소스가 선언한 등급</li>
+        <li>의존 리소스들의 등급</li>
+        <li>인증자의 등급</li>
+        <li>작업을 넘겨받은 실행 서버의 등급</li>
+        <li>리소스가 실행 중에 요구하는 <strong>스텝업(step-up)</strong>. 예를 들어 주문 금액이 기준을 넘을 때 요구합니다.</li>
+    </ul>
+    <p>등급이 올라가면 그 이유도 감사 기록에 남깁니다.</p>
+    <h3>로그인은 두 종류이며, 서로 섞지 않는다</h3>
+    <ul>
+        <li><strong>레지스트리 로그인</strong>(사용자 ↔ doax)을 하면 서명된 토큰을 받습니다. 이 토큰은 누구나 오프라인으로 검증할 수 있고, 사용자가 누구인지와 접근할 수 있는 네임스페이스만 담습니다. 리소스별 권한은 담지 않습니다. 현재 운영 중인 레지스트리에서는 이메일로 받은 코드로 로그인하며, <code>doax login --web</code>을 쓰면 브라우저에서 바로 토큰을 받아 옵니다.</li>
+        <li><strong>대상 시스템 로그인</strong>(사용자 ↔ Slack, Google, Microsoft 등)은 <code>@doax/slack-login</code> 같은 <strong>인증자(authenticator)</strong> 리소스가 맡습니다. 받아 온 자격 증명은 사용자와 인증자 조합별로 한 번만 저장하고, 같은 인증자를 쓰는 리소스끼리 함께 씁니다. 그래서 시스템마다 한 번만 로그인하면 됩니다.</li>
+    </ul>
+    <p>인증자는 저마다 <strong>주체(subject)</strong>를 선언합니다. <code>personal</code>은 호출한 사람 본인의 자격 증명, <code>organization</code>은 서비스 계정, <code>machine</code>은 등록된 실행 서버의 자격 증명입니다. 인증자 매니페스트에는 로그인 절차 전체와 요청하는 권한, 권한을 회수하는 방법이 적혀 있어서, 검토자가 사용 전에 미리 판단할 수 있습니다.</p>
+
+    <h2 id="audit">감사와 무결성</h2>
+    <p>
+        리졸브, 패키지 다운로드, 메타데이터 조회, 데이터 읽기, 드라이런, 실행, 작업 위임, 스텝업, 로그인, 배포,
+        버전 상태 변경을 모두 감사 이벤트로 기록합니다. 감사 로그에는 기록을 추가할 수만 있습니다.
+        기록을 고치거나 지우는 기능은 아예 없으며, 바로잡을 때는 원래 기록을 가리키는 새 기록을 덧붙입니다.
+    </p>
+    <p>
+        각 기록에는 누가, 어떤 리소스 버전을, 어디서 실행했는지와 실효 등급 및 그 근거, 사용한 인증자, 대상 시스템,
+        결과를 담습니다. 액션이라면 멱등성 키를, 읽기라면 원본 데이터의 기준 시각을 함께 적습니다.
+        자격 증명 값은 어떤 경우에도 기록하지 않습니다.
+    </p>
+    <p>
+        무결성은 실행 전에 확인합니다. 패키지의 다이제스트가 매니페스트에 적힌 배포 시점의 값과 다르면 실행을 거부합니다.
+        감사 기록을 보낼 곳은 네임스페이스마다 정합니다. 실행 주체가 기록을 보내지 못하면 로컬에 쌓아 두고, 버리지 않습니다.
+        네임스페이스 소유자는 <code>doax audit</code>으로 기록을 조회합니다.
+    </p>
+
+    <h2 id="architecture">아키텍처</h2>
+    <p>
+        doax는 리소스를 보관하고 설명하는 서비스와, 리소스를 실제로 실행하는 <strong>실행 주체(executor)</strong>로 나뉩니다.
+        실행 주체는 사람을 대신해 움직이는 프로그램이라면 무엇이든 될 수 있습니다. Claude Code 같은 에이전트,
+        웹 앱, 배치 작업이 모두 실행 주체입니다. 실행 주체는 <strong>doax 인터페이스</strong>를 거쳐 리소스를 호출하고,
+        위임과 증명은 이 어댑터가 보장합니다.
+    </p>
+    <div class="diagram">
+        <svg viewBox="0 0 760 432" role="img" aria-label="실행 주체는 언제나 doax 어댑터를 거쳐 리소스를 호출한다" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Apple SD Gothic Neo, Malgun Gothic, Noto Sans KR, sans-serif" font-size="13">
+            <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#5c7097"/></marker></defs>
+            <text x="24" y="32" font-size="15" font-weight="600" fill="#eaf1fb">실행 주체는 언제나 doax 어댑터를 거쳐 리소스를 호출한다</text>
+            <rect x="24" y="56" width="320" height="256" rx="8" fill="#0f1828" stroke="#182438"/>
+            <text x="40" y="78" font-weight="600" fill="#91a4c2">실행 주체 · 에이전트, 웹 앱, 프로그램</text>
+            <rect x="440" y="56" width="296" height="256" rx="8" fill="#0f1828" stroke="#182438"/>
+            <text x="456" y="78" font-weight="600" fill="#91a4c2">doax 서비스 · registry.doax.io</text>
+            <g fill="none" stroke="#5c7097" stroke-width="1.25">
+                <path d="M184 152V182" marker-end="url(#arrow)"/>
+                <path d="M320 200H380V124H454" marker-end="url(#arrow)"/>
+                <path d="M320 228H400V196H454" marker-end="url(#arrow)"/>
+                <path d="M320 256H420V268H454" marker-end="url(#arrow)"/>
+                <path d="M184 272V350" marker-end="url(#arrow)"/>
+            </g>
+            <rect x="48" y="96" width="272" height="56" rx="8" fill="none" stroke="#2a3a56" stroke-width="1.25"/>
+            <text x="64" y="120" font-weight="600" fill="#eaf1fb">직접 만든 프로그램</text>
+            <text x="64" y="136" font-size="11.5" fill="#91a4c2">읽기나 액션을 요청</text>
+            <rect x="48" y="184" width="272" height="88" rx="8" fill="rgba(55,230,208,.1)" stroke="#37e6d0" stroke-width="2"/>
+            <text x="64" y="208" font-weight="600" fill="#eaf1fb">doax 인터페이스 (어댑터)</text>
+            <text x="64" y="224" font-size="11.5" fill="#eaf1fb">리졸브, 다이제스트 확인, 등급 적용</text>
+            <text x="64" y="240" font-size="11.5" fill="#eaf1fb">패키지 실행, 자격 증명 보관</text>
+            <text x="64" y="256" font-size="11.5" fill="#eaf1fb">호출마다 감사 기록 작성</text>
+            <rect x="456" y="96" width="264" height="56" rx="8" fill="none" stroke="#2a3a56" stroke-width="1.25"/>
+            <text x="472" y="120" font-weight="600" fill="#eaf1fb">Registry Server</text>
+            <text x="472" y="136" font-size="11.5" fill="#91a4c2">매니페스트, 검색, 리졸브, 감사 로그</text>
+            <rect x="456" y="168" width="264" height="56" rx="8" fill="none" stroke="#2a3a56" stroke-width="1.25"/>
+            <text x="472" y="192" font-weight="600" fill="#eaf1fb">Code Repository</text>
+            <text x="472" y="208" font-size="11.5" fill="#91a4c2">불변 패키지, 다이제스트로 식별</text>
+            <rect x="456" y="240" width="264" height="56" rx="8" fill="none" stroke="#2a3a56" stroke-width="1.25"/>
+            <text x="472" y="264" font-weight="600" fill="#eaf1fb">Auth Server</text>
+            <text x="472" y="280" font-size="11.5" fill="#91a4c2">로그인, 오프라인 검증용 토큰 발급</text>
+            <rect x="48" y="352" width="272" height="56" rx="8" fill="none" stroke="#2a3a56" stroke-width="1.25"/>
+            <text x="64" y="376" font-weight="600" fill="#eaf1fb">대상 시스템</text>
+            <text x="64" y="392" font-size="11.5" fill="#91a4c2">Slack, Google, Microsoft, 웹</text>
+            <text x="196" y="336" font-size="11.5" fill="#91a4c2">저장해 둔 자격 증명으로 호출</text>
+        </svg>
+    </div>
+    <p>
+        서비스는 리소스를 실행하지 않으며, 대상 시스템의 자격 증명도 보지 못합니다. 실제 작업은 실행 주체 안의
+        doax 인터페이스가 맡습니다. 리소스를 찾아 패키지를 내려받고, 다이제스트를 확인하고, 실효 등급을 계산합니다.
+        이어서 인증자에게서 자격 증명을 받아 패키지를 실행하고, 감사 기록을 남깁니다.
+    </p>
+    <div class="table-scroll"><table>
+        <tr><th>구성 요소</th><th>하는 일</th></tr>
+        <tr><td>실행 주체</td><td>사람을 대신해 움직이는 모든 프로그램. <a href="https://demo.app.doax.io" rel="noopener">라이브 데모</a>의 대시보드도 그 예로, 브라우저에서 리소스를 찾고 다이제스트를 확인한 뒤 데이터를 읽어 옵니다.</td></tr>
+        <tr><td>doax 인터페이스</td><td>감사 기능을 갖춘 어댑터. 대상 시스템의 자격 증명을 다루는 곳은 여기뿐이며, 실행 주체는 이 확인 절차를 건너뛸 수 없습니다.</td></tr>
+        <tr><td>Registry Server</td><td>매니페스트 보관, 검색, 리졸브, 네임스페이스 관리, 감사 기록 저장과 조회.</td></tr>
+        <tr><td>Code Repository</td><td>불변 패키지 보관.</td></tr>
+        <tr><td>Auth Server</td><td>로그인 처리와 토큰 발급. 토큰은 오프라인으로 검증할 수 있습니다.</td></tr>
+        <tr><td>Executor host</td><td>회사 네트워크 안에서 실행해야 하는 <code>trusted-executor</code> 작업을 위해 조직이 직접 운영하는 서버. 아직 뼈대만 있습니다.</td></tr>
+    </table></div>
+    <p>
+        레지스트리는 npm처럼 평범한 HTTPS와 JSON으로 동작합니다. doax.io는 세 서비스를 Lambda 하나에 담아
+        CloudFront와 API Gateway 뒤에서 운영하며, 데이터는 Aurora PostgreSQL과 S3에 저장합니다. 온프레미스용
+        <code>doax-server</code>는 같은 세 서비스를 SQLite와 로컬 파일만으로 한 프로세스에서 실행합니다.
+    </p>
+
+    <h2 id="cli">개발자 CLI</h2>
+    <p>
+        <code>doax</code> CLI는 실행 주체가 아니라 개발자 도구입니다. 같은 인터페이스를 바탕으로 리소스를 둘러보고,
+        시험하고, 배포하고, 감사 기록을 확인할 때 씁니다. <a href="/install">설치</a>한 뒤 다음과 같이 써 보세요.
+    </p>
+    <pre><span class="p">$</span> doax search slack                                  <span class="c"># 리소스 찾기</span>
+<span class="p">$</span> doax resolve @doax/slack-post                       <span class="c"># 매니페스트 전체 보기</span>
+<span class="p">$</span> doax auth set @doax/slack-login                     <span class="c"># Slack에 한 번 로그인해 두기</span>
+<span class="p">$</span> doax read @doax/slack-channel-history --param channel=C0123456789
+<span class="p">$</span> doax execute @doax/slack-post --param channel=C0123456789 \
+      --param text="hello from doax" --dry-run         <span class="c"># 실제로 보내지 않고 미리 보기</span>
+<span class="p">$</span> doax login --email you@example.com                  <span class="c"># 이메일로 받은 6자리 코드로 로그인 (--web도 가능)</span>
+<span class="p">$</span> doax audit --resource @doax/slack-post              <span class="c"># 실행 기록 확인</span></pre>
+    <div class="table-scroll"><table>
+        <tr><th>명령</th><th>하는 일</th></tr>
+        <tr><td><code>search</code>, <code>resolve</code></td><td>리소스를 찾고 매니페스트를 보여 줍니다.</td></tr>
+        <tr><td><code>read</code></td><td>data-source를 읽습니다. <code>--metadata</code>를 붙이면 메타데이터만 읽습니다.</td></tr>
+        <tr><td><code>execute</code></td><td>액션을 미리 보거나 실행합니다.</td></tr>
+        <tr><td><code>auth set | list | purge</code></td><td>저장해 둔 대상 시스템 자격 증명을 인증자별로 관리합니다.</td></tr>
+        <tr><td><code>login</code>, <code>logout</code>, <code>whoami</code></td><td>레지스트리에 로그인하거나 로그아웃하고, 내 정보를 확인합니다.</td></tr>
+        <tr><td><code>publish</code></td><td>매니페스트와 패키지를 배포합니다.</td></tr>
+        <tr><td><code>audit</code></td><td>내 네임스페이스의 감사 기록을 조회합니다.</td></tr>
+        <tr><td><code>registry add | list | remove</code></td><td>npm 스코프처럼 네임스페이스별로 다른 레지스트리를 연결합니다.</td></tr>
+        <tr><td><code>app deploy</code></td><td>정적 앱을 <code>https://&lt;ns&gt;.app.doax.io</code>에 올리고, doax 로그인으로 접근을 제한합니다.</td></tr>
+    </table></div>
+    <p>스크립트나 CI에서도 쓸 수 있도록 모든 명령은 사용자 입력 없이 실행할 수 있습니다. <code>--json</code>을 붙이면 결과를 JSON 객체 하나로 출력하고, 오류가 나면 <code>faultClass</code>와 해결 방법도 함께 알려 줍니다. <code>--no-input</code>은 입력 요청을 끄고, <code>--secret</code>은 자격 증명을 명령에 직접 넘기며, <code>--yes</code>는 Tier 2 호출 확인을 미리 승인합니다.</p>
+
+    <h2 id="publishing">리소스 배포</h2>
+    <p>리소스는 JSON 매니페스트와 패키지, 두 파일로 이루어집니다.</p>
+    <pre><span class="p">$</span> doax login --email you@example.com
+<span class="p">$</span> doax publish my-resource.manifest.json my-resource.mjs</pre>
+    <p>
+        <code>@global</code>에는 로그인한 사람이라면 누구나 배포할 수 있습니다. 다른 네임스페이스에 배포하려면
+        해당 네임스페이스의 역할이 있어야 합니다. 배포하면 레지스트리가 패키지 다이제스트를 기록하며, 이후 그 버전은 바꿀 수 없습니다.
+    </p>
+    <p>
+        직접 작성하는 패키지는 리소스 종류에 맞는 함수를 내보내는 ES 모듈입니다. data-source라면 <code>describe()</code>,
+        <code>metadata()</code>, <code>read(input)</code>을 내보내고, <code>read</code>는 <code>{ data, freshness, continuation }</code>을
+        반환합니다. 오류에는 매니페스트의 예상 장애 목록에 있는 <code>faultClass</code> 중 하나를 붙입니다.
+    </p>
+    <p>
+        매니페스트에는 설명뿐 아니라 서비스 수준도 밝혀야 합니다. 예상 장애마다 원인, 호출한 쪽이 받는 영향,
+        발생 빈도, 대응 방법을 적습니다. 성능이 떨어졌을 때의 동작과 목표 응답 시간도 함께 적습니다.
+    </p>
+
+    <h2 id="catalog">지금 쓸 수 있는 리소스</h2>
+    <p>
+        현재 배포된 리소스는 33개입니다. 다섯 묶음으로 나뉜 공식 <code>@doax</code> 어댑터 32개와
+        <code>@global/web-fetch</code>입니다. 모두 1.0.0 버전이며, 실행 주체가 있는 곳에서 실행됩니다.
+        <code>@doax</code> 리소스는 모두 Tier 3이고, <code>web-fetch</code>는 로그인이 필요 없는 Tier 4입니다.
+        묶음마다 인증자 하나를 함께 쓰므로, 묶음별로 한 번만 로그인하면 됩니다.
+    </p>
+    <div class="table-scroll"><table>
+        <tr><th>묶음</th><th>인증자</th><th>data-source</th><th>action</th></tr>
+        <tr><td>Slack</td><td><code>slack-login</code><br>사용자 토큰 또는 봇 토큰</td><td>slack-list-channel, slack-channel-history, slack-search</td><td>slack-post</td></tr>
+        <tr><td>Microsoft Teams</td><td><code>teams-login</code><br>디바이스 코드 OAuth</td><td>teams-list-team, teams-list-channel, teams-channel-messages, teams-search</td><td>teams-post</td></tr>
+        <tr><td>Google Drive</td><td><code>google-drive-login</code><br>리프레시 토큰</td><td>google-drive-list, google-drive-changes, google-drive-get (파일 내용까지 받을 수 있음)</td><td>없음</td></tr>
+        <tr><td>OneDrive</td><td><code>onedrive-login</code><br>리프레시 토큰</td><td>onedrive-list, onedrive-changes, onedrive-get (파일 내용까지 받을 수 있음)</td><td>없음</td></tr>
+        <tr><td>Google 사용자 API</td><td><code>gmail-login</code><br>리프레시 토큰</td><td>gmail-messages, gmail-get, gmail-history, gmail-labels, calendar-list, calendar-events, calendar-event-get, contacts-list, contacts-get, tasklists-list, tasks-list, task-get</td><td>없음</td></tr>
+        <tr><td>공개 웹</td><td>없음</td><td>@global/web-fetch</td><td>없음</td></tr>
+    </table></div>
+    <p>Google과 OneDrive 인증자에는 <code>auth.doax.io</code>에서 한 번 동의해 받은 리프레시 토큰을 입력합니다. Google 권한은 모두 읽기 전용입니다. 리소스별 등급과 검증 상태는 <a href="/">카탈로그 검색</a>에서 확인할 수 있습니다.</p>
+
+    <h2 id="deployment">제공 방식과 진행 상황</h2>
+    <p>doax는 호스팅 SaaS로 먼저 제공하고, 물리적 분리가 필요한 조직에는 온프레미스로 제공합니다. 두 방식 모두 같은 코드를 씁니다.</p>
+    <div class="table-scroll"><table>
+        <tr><th></th><th>호스팅 (doax.io)</th><th>온프레미스 (doax-server)</th></tr>
+        <tr><td>대상</td><td>누구나. 조직마다 <code>@org</code> 네임스페이스를 따로 받습니다.</td><td>데이터나 자격 증명이 사내망을 벗어나면 안 되는 조직</td></tr>
+        <tr><td>실행 환경</td><td>AWS: Lambda, API Gateway, Aurora PostgreSQL, S3, CloudFront</td><td>프로세스 하나. Docker 이미지나 <code>npx doax-server</code>로 실행하며, SQLite와 로컬 파일을 씁니다.</td></tr>
+        <tr><td>분리 수준</td><td>접근 제어까지만. 매니페스트는 doax 인프라에 저장됩니다.</td><td>물리적 분리. 상위 레지스트리 연결은 선택 사항이며, 기본으로 꺼져 있습니다.</td></tr>
+        <tr><td>상태</td><td class="live">운영 중</td><td>빌드와 테스트는 통과했으나, 전체 흐름을 실제로 돌려 본 적은 아직 없습니다.</td></tr>
+    </table></div>
+    <p>SaaS의 비공개 <code>@org</code> 리소스는 접근 제어로 보호될 뿐, 물리적으로 분리되어 있지는 않습니다. 사내망에 접근해야 하는 리소스라면 그 사내망 안에 신뢰할 수 있는 실행 서버(trusted executor)를 두어야 합니다.</p>
+    <h3>아직 구현하지 않은 것</h3>
+    <ul>
+        <li>호스팅 실행 서버와 <code>trusted-executor</code> 작업 위임. 지금은 모든 리소스를 호출한 쪽에서 실행합니다.</li>
+        <li>OIDC와 Google 로그인. 지금은 같은 토큰 규격을 쓰는 이메일 코드 로그인을 사용합니다.</li>
+        <li>검증 심사. 검증 상태는 표시되지만, 실제로 심사하는 사람은 아직 없습니다.</li>
+        <li>doax-app 접근 제어. 지금은 로그인한 사람이라면 누구나 배포된 앱을 볼 수 있습니다.</li>
+    </ul>
+
+    <h2 id="machine-readable">기계용 매니페스토</h2>
+    <p>
+        doax 서비스가 반환하는 모든 JSON 응답에는 <code>manifesto</code> 필드가 있습니다. 이 필드는 doax를 소개하는
+        고정 문서를 가리키므로, doax를 처음 만난 에이전트도 상대가 무엇인지 알 수 있습니다.
+    </p>
+    <pre><span class="c"># 같은 내용, 기계가 읽는 형식</span>
+<span class="p">$</span> curl https://registry.doax.io/manifesto.json</pre>
+    <p class="note">이 페이지는 사람이 읽는 판이고, 기계가 읽는 판은 <a href="https://registry.doax.io/manifesto.json" rel="noopener">manifesto.json</a>입니다.</p>
+
+    <footer>
+        <a href="/">doax.io</a>
+        <a href="/install">설치</a>
+        <a href="/playbook">플레이북</a>
+        <a href="/doax-manifesto" hreflang="en" lang="en">English</a>
+        <a href="https://registry.doax.io/manifesto.json" rel="noopener">manifesto.json</a>
+        <a href="https://registry.doax.io" rel="noopener">레지스트리 API</a>
+    </footer>
+</div>
+</body>
+</html>

@@ -54,6 +54,7 @@ header.nav{position:sticky;top:0;z-index:5;backdrop-filter:blur(8px);background:
 .ring{width:17px;height:17px;border-radius:50%;background:conic-gradient(from 210deg,#37e6d0,#4f8dff,#37e6d0);
 mask:radial-gradient(circle at 50% 50%,transparent 52%,#000 54%);-webkit-mask:radial-gradient(circle at 50% 50%,transparent 52%,#000 54%)}
 .brand small{color:#5c7097;font-weight:600;font-size:12px}
+@media (max-width:640px){.brand small{display:none}}
 .nav-in .sp{margin-left:auto}.nav-in a.ghost{color:#91a4c2;font-size:14px}
 .wrap{max-width:900px;margin:0 auto;padding:0 20px}
 .crumb{font-size:13px;color:#5c7097;padding:22px 0 0}.crumb a{color:#91a4c2}
@@ -83,7 +84,7 @@ function shell(title, crumbHtml, bodyHtml, { desc } = {}) {
 <meta name="description" content="${esc(desc ?? "Playbooks for building apps on the doax registry.")}">
 <style>${STYLE}</style></head><body>
 <header class="nav"><div class="nav-in">
-<a class="brand" href="/"><span class="ring"></span> doax <small>Day One AX</small></a>
+<a class="brand" href="/"><span class="ring"></span> doax <small>Delegated Operation, Attested eXecution</small></a>
 <span class="sp"></span><a class="ghost" href="/playbook">Playbooks</a>
 <a class="ghost" href="/install">Install CLI</a>
 <a class="ghost" href="https://registry.doax.io" target="_blank" rel="noopener">registry.doax.io ↗</a>

@@ -71,6 +71,27 @@ resource "aws_s3_object" "install_page" {
   cache_control = "public, max-age=300"
 }
 
+# The human-readable manifesto, served at https://doax.io/doax-manifesto
+# (the machine-readable one is registry.doax.io/manifesto.json)
+resource "aws_s3_object" "manifesto_page" {
+  bucket        = aws_s3_bucket.site.id
+  key           = "doax-manifesto"
+  source        = "${path.module}/build/site/doax-manifesto.html"
+  etag          = filemd5("${path.module}/build/site/doax-manifesto.html")
+  content_type  = "text/html; charset=utf-8"
+  cache_control = "public, max-age=300"
+}
+
+# The manifesto's Korean edition, served at https://doax.io/doax-manifesto-ko
+resource "aws_s3_object" "manifesto_page_ko" {
+  bucket        = aws_s3_bucket.site.id
+  key           = "doax-manifesto-ko"
+  source        = "${path.module}/build/site/doax-manifesto-ko.html"
+  etag          = filemd5("${path.module}/build/site/doax-manifesto-ko.html")
+  content_type  = "text/html; charset=utf-8"
+  cache_control = "public, max-age=300"
+}
+
 # The one-liner installer: curl -fsSL https://doax.io/install.sh | bash
 resource "aws_s3_object" "install_sh" {
   bucket        = aws_s3_bucket.site.id

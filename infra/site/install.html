@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="Install the doax CLI — the executor for the doax registry of agent interfaces.">
+<meta name="description" content="Install the doax CLI — the developer tool for doax (Delegated Operation, Attested eXecution).">
 <title>Install the doax CLI</title>
 <style>
     :root {
@@ -69,9 +69,11 @@
 
     <h1>Install the doax CLI</h1>
     <p class="lede">
-        <code>doax</code> is the executor for the doax registry: it resolves resources, verifies package
-        integrity, runs the authentication tier a resource demands, invokes it, and records every access
-        in the audit log.
+        <code>doax</code> is the developer tool for doax: search the registry, try resources, publish
+        your own and query the audit log. Every call goes through the doax interface, which verifies package
+        integrity, runs the authentication tier a resource demands, invokes it, and records every access.
+        In production the executor is your own agent, web app or program; see the
+        <a href="/doax-manifesto">manifesto</a>.
     </p>
 
     <h2>Requirements</h2>
