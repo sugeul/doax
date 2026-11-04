@@ -26,13 +26,15 @@ export const ANONYMOUS_ACTOR = "anonymous";
 
 /**
   * Where an event was observed. The CLI writes `caller-device` events to its own LOCAL log
-  * only (spec §8.3); the central audit log the Registry keeps has two writers — an Executor
-  * Resource (`executor`), for the dispatched work it answered, and the Registry (`registry`),
+  * only (spec §8.3). The central audit log the Registry keeps is written by whatever ran the
+  * work server-side — an `executor` host (dispatched §6A work) or a `server` Resource (a
+  * self-hosted service, §6.5) — each under its own resource token, plus the `registry` itself
   * for its own surface (spec §8.2).
   */
 export type AuditExecutionLocation =
     | { kind: "caller-device"; deviceId: string }
     | { kind: "executor"; executor: string }
+    | { kind: "server"; server: string }
     | { kind: "registry"; registry: string };
 
 /** Mandatory event fields (spec §8.4). Events are append-only once written (spec §8.1). */

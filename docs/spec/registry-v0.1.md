@@ -104,7 +104,7 @@ Every Manifest MUST contain:
 | description | Free-text description; MAY include informal guidance such as how to query the source (see §5.4) |
 | owner | Contact of the publishing Principal or team |
 | required tier | The minimum Tier the Resource demands (§7.3) |
-| execution location | `caller-device` or `trusted-executor` (§6.5). Required for `data-source`, `action`, and `authenticator`; for an `authenticator` it MUST be `caller-device` when the subject is `personal` and `trusted-executor` when the subject is `organization`, and is absent when the subject is `machine`. Absent for `executor`, which is itself a location. |
+| execution location | `caller-device`, `trusted-executor`, or `server` (§6.5). Required for `data-source`, `action`, and `authenticator`; for an `authenticator` it MUST be `caller-device` when the subject is `personal` and `trusted-executor` or `server` when the subject is `organization`, and is absent when the subject is `machine`. Absent for `executor`, which is itself a location. |
 | audit scope | Which event classes this Resource emits beyond the mandatory set (§8.3) |
 | integrity | A digest of the Package contents, computed at publish time |
 | dependencies | Other Resources this Resource invokes, by identity. Transitive Tier requirements are computed from this list (§7.4). |
@@ -345,10 +345,11 @@ Every Data Source, Action, and Authenticator MUST declare where it runs (an Exec
 
 | Location | Meaning | Credential implication |
 |---|---|---|
-| `caller-device` | Runs on the caller's machine via the Executor CLI | Uses the caller's personal credentials, cached locally (§7.6). Audit events are reported by the Executor CLI. |
-| `trusted-executor` | Runs on an Executor Resource (§6A) that matches the Resource's declared executor requirements | Uses organization-held system credentials. Audit events are produced by the Executor Resource. |
+| `caller-device` | Runs on the caller's machine via the Executor CLI | Uses the caller's personal credentials, cached locally (§7.6). Audit events are reported by the Executor CLI into its local log and are NOT delivered to the central store (§8.2). |
+| `trusted-executor` | Runs on an Executor Resource (§6A) that matches the Resource's declared executor requirements | Uses organization-held system credentials. Audit events are produced by the Executor Resource that ran it. |
+| `server` | The Resource is its own hosted service — a server, Lambda, or MCP endpoint its publisher operates — invoked directly over its binding, not dispatched | Uses credentials the server holds. The server produces its own audit events, under its own resource token (§8.2a). |
 
-Scheduled or unattended Actions (for example, nightly data refresh) MUST declare `trusted-executor`.
+`trusted-executor` and `server` differ in who provides the runtime: a shared §6A Executor Resource for the former, the Resource's own operator for the latter. Both run server-side and write the central audit; only `caller-device` work stays off it. Scheduled or unattended Actions (for example, nightly data refresh) MUST declare `trusted-executor` or `server`.
 
 **Execution location is a constraint, not a preference.** The following rules exist to resist the pressure to move device-runnable work onto shared machines, which would concentrate personal credentials centrally, blur the audit actor, and turn shared machines into everyone's bottleneck:
 
@@ -496,16 +497,16 @@ An Auth Server's role is limited to asserting **who the Principal is and which n
 - Each namespace declares an **audit destination**: the Private Registry's own audit store, or none (local-only on the Executor).
 - When a destination is declared, every Executor acting within that namespace MUST deliver its events there. An Executor that cannot deliver MUST buffer locally and MUST refuse to discard buffered events.
 - An Auth Server MUST NOT be an audit destination for Resource invocations.
-- The central audit store has two writers, each recording what it observed, so each carries that party's level of trust:
+- The central audit store is written by whoever ran the work server-side, each recording what it observed, so each carries that party's level of trust:
   - **Registry record.** The Registry writes what it observes itself: sign-in, token issue and revocation, resolve, search, publish, yank, and audit query.
-  - **Executor Resource record.** An Executor Resource writes the work it answered on behalf of a caller — which operation, for which caller, with what result (§8.2a) — and a `dispatch` record of who used it to run which Resource (§6A.3).
+  - **Server-side Resource record.** A Resource that runs server-side — an Executor Resource (`trusted-executor`, §6A) or a self-hosted `server` Resource (§6.5) — writes the work it answered on behalf of a caller: which operation, for which caller, with what result (§8.2a). An Executor Resource additionally writes a `dispatch` record of who used it to run which Resource (§6A.3).
 - Work that runs on the caller's device is **not** written to the central store. The Executor CLI records it as the caller's own report and keeps it locally (`~/.doax/audit.jsonl`, §8.3); it is never delivered.
 
 ### 8.2a Resource audit
 
-An **Executor Resource** MUST write an audit event to its Registry for each Fixed Interface operation it answers (§4.6): `authenticate`, `metadata`, `read`, `dry-run`, `execute`, and `dispatch`, and also for a recovery action it runs or a step-up it demands. This record is the Executor Resource's own statement that it answered a given caller. A Resource that runs on the caller's device does **not** write to the central store; that work is covered by the Executor CLI's local report (§8.3). Accordingly, the Registry accepts an ingested event only when its *execution location* is `executor`.
+A **server-side Resource** — an Executor Resource (`trusted-executor`) or a self-hosted `server` Resource (§6.5) — MUST write an audit event to its Registry for each Fixed Interface operation it answers (§4.6): `authenticate`, `metadata`, `read`, `dry-run`, `execute`, and `dispatch`, and also for a recovery action it runs or a step-up it demands. This record is the Resource's own statement that it answered a given caller. A Resource that runs on the caller's device does **not** write to the central store; that work is covered by the Executor CLI's local report (§8.3). Accordingly, the Registry accepts an ingested event only when its *execution location* is `executor` or `server`.
 
-**Authentication.** An Executor Resource writes with a **resource token**. The Registry mints the token when such a Resource is created, that is, at the first publish of an `executor`-kind `@namespace/name`; it is not minted for caller-device Resources. It returns the token once, in the publish response, and from then on the Resource holds it. The Registry stores only the token's hash. A manager of the Resource can issue a further token, to rotate it or after a leak, and can revoke any token. The managers are the operator; in a claimed namespace, its owners and publishers; and in a shared namespace, whoever published a version of that Resource. A token is scoped to `@namespace/name` and covers every version. Issuing or revoking a token is a Registry `auth` event. The Registry MUST refuse an event that comes without a live resource token, or whose `resource` is not a version of the token's Resource. On every event it accepts, the Registry records which token reported it.
+**Authentication.** A server-side Resource writes with a **resource token**. The Registry mints the token when such a Resource is created, that is, at the first publish of an `executor`-kind or `server`-location `@namespace/name`; it is not minted for caller-device Resources. It returns the token once, in the publish response, and from then on the Resource holds it. The Registry stores only the token's hash. A manager of the Resource can issue a further token, to rotate it or after a leak, and can revoke any token. The managers are the operator; in a claimed namespace, its owners and publishers; and in a shared namespace, whoever published a version of that Resource. A token is scoped to `@namespace/name` and covers every version. Issuing or revoking a token is a Registry `auth` event. The Registry MUST refuse an event that comes without a live resource token, or whose `resource` is not a version of the token's Resource. On every event it accepts, the Registry records which token reported it.
 
 **Mandatory content.** Beyond §8.4, each event MUST carry:
 
@@ -553,7 +554,7 @@ Every event MUST record:
 | timestamp | Time the event occurred, as observed by the writer |
 | class | One of §8.3 |
 | actor | Principal identity, or anonymous marker for Tier 4 |
-| execution location | `caller-device` with the device identifier, the Executor Resource identity `@namespace/name@version`, or `registry` with the Registry's domain for events the Registry Server writes about its own surface (sign-in, publish, resolve, audit query) |
+| execution location | `caller-device` with the device identifier, the Executor Resource identity `@namespace/name@version`, `server` with the self-hosted Resource's identity `@namespace/name@version` (§6.5), or `registry` with the Registry's domain for events the Registry Server writes about its own surface (sign-in, publish, resolve, audit query) |
 | executor cpu time | For every event emitted by an Executor Resource: CPU time consumed by the operation on that machine, as reported by the machine. Absent for events emitted by an Executor CLI. |
 | resource | `@namespace/name@version`; for `auth` events from `authenticate`, the Authenticator's identity |
 | authenticator | For `data-read`, `dry-run`, `execute`, `recover`, `dispatch`: the Authenticator whose credentials were used, or `none` |

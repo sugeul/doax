@@ -37,7 +37,13 @@ export function formatResourceRef(ref: ResourceRef): string {
     return ref.version === undefined ? base : `${base}@${ref.version}`;
 }
 
-export type ExecutionLocation = "caller-device" | "trusted-executor";
+/**
+  * Where a Resource runs (§6.5). `caller-device`: the CLI runs the package on the user's
+  * machine. `trusted-executor`: a shared §6A Executor Resource host runs it on dispatch.
+  * `server`: the Resource is its own hosted service (e.g. a Lambda reading an RDB) — it runs
+  * server-side and writes its own audit. Only `caller-device` work stays off the central log.
+  */
+export type ExecutionLocation = "caller-device" | "trusted-executor" | "server";
 
 /** Visibility and verification are independent axes (spec §4.5). */
 export type Visibility = "public" | "namespace-only" | "grant-list";

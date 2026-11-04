@@ -676,10 +676,10 @@ app.post("/audit", async (c) => {
             return c.json(withManifesto(DOMAIN, { error: `event ${index}: this token reports for ${reporter.resource}@<version> only` }), 403);
         }
         const loc = event.executionLocation as { kind?: unknown } | undefined;
-        if (!loc || loc.kind !== "executor") {
+        if (!loc || (loc.kind !== "executor" && loc.kind !== "server")) {
             return c.json(
                 withManifesto(DOMAIN, {
-                    error: `event ${index}: the central audit log accepts only Executor Resource events (executionLocation.kind "executor", §8.2); caller-device work stays in the CLI's local log (§8.3)`,
+                    error: `event ${index}: the central audit log accepts only server-side events (executionLocation.kind "executor" or "server", §8.2); caller-device work stays in the CLI's local log (§8.3)`,
                 }),
                 400,
             );
@@ -720,11 +720,15 @@ app.post(TOKENS_PATH, async (c) => {
     const namespace = c.req.param("ns").slice(1);
     const name = c.req.param("name");
     await ensureSchema();
-    const existing = await db!.query<{ kind: string }>(`SELECT kind FROM manifests WHERE namespace = $1 AND name = $2 LIMIT 1`, [namespace, name]);
+    const existing = await db!.query<{ kind: string; exec: string | null }>(
+        `SELECT kind, manifest->>'executionLocation' AS exec FROM manifests WHERE namespace = $1 AND name = $2 LIMIT 1`,
+        [namespace, name],
+    );
     if (existing.rows.length === 0) return c.json(withManifesto(DOMAIN, { error: `not found: @${namespace}/${name}` }), 404);
-    if (existing.rows[0]!.kind !== "executor") {
+    const { kind, exec } = existing.rows[0]!;
+    if (kind !== "executor" && exec !== "server") {
         return c.json(
-            withManifesto(DOMAIN, { error: `@${namespace}/${name} is ${existing.rows[0]!.kind}, not an executor; only Executor Resources write the central audit log (§8.2)` }),
+            withManifesto(DOMAIN, { error: `@${namespace}/${name} runs ${exec ?? kind} on the caller's device; only server-side Resources (executor or server) write the central audit log (§8.2)` }),
             409,
         );
     }
@@ -908,9 +912,11 @@ app.put("/:ns{@[a-z0-9._-]+}/:namever", async (c) => {
         }),
     );
     await appendAudit([registryEvent("publish", identity, actor, { digest })]);
-    // Only an Executor Resource writes the central audit log (§8.2), so only it is minted a token,
-    // once, on creation. Caller-device resources are covered by the CLI's local log (§8.3).
-    const resourceToken = created && manifest.kind === "executor" ? await mintResourceToken(namespace!, name!, actor) : undefined;
+    // Server-side resources write the central audit log (§8.2) and so are minted a token, once, on
+    // creation: an `executor` host, or a `server`-location Resource that self-hosts (e.g. a Lambda).
+    // Caller-device resources write nothing central — the CLI keeps their local log (§8.3).
+    const serverSide = manifest.kind === "executor" || manifest.executionLocation === "server";
+    const resourceToken = created && serverSide ? await mintResourceToken(namespace!, name!, actor) : undefined;
     return c.json(
         withManifesto(DOMAIN, {
             published: identity,
