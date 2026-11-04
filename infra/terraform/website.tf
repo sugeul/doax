@@ -71,6 +71,17 @@ resource "aws_s3_object" "install_page" {
   cache_control = "public, max-age=300"
 }
 
+# The specification, served at https://doax.io/spec — the URL every component advertises as its
+# `specification` (§10A). Rendered from docs/spec/registry-v0.1.md by infra/build-spec.mjs.
+resource "aws_s3_object" "spec_page" {
+  bucket        = aws_s3_bucket.site.id
+  key           = "spec"
+  source        = "${path.module}/build/site/spec.html"
+  etag          = filemd5("${path.module}/build/site/spec.html")
+  content_type  = "text/html; charset=utf-8"
+  cache_control = "public, max-age=300"
+}
+
 # The human-readable manifesto, served at https://doax.io/doax-manifesto
 # (the machine-readable one is registry.doax.io/manifesto.json)
 resource "aws_s3_object" "manifesto_page" {

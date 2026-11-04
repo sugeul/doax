@@ -4,6 +4,7 @@
 #   install.html — the CLI install guide (served at /install)
 #   doax-manifesto.html — the human-readable manifesto (served at /doax-manifesto)
 #   doax-manifesto-ko.html — its Korean edition (served at /doax-manifesto-ko)
+#   spec.html    — the specification rendered from docs/spec (served at /spec)
 #   install.sh   — the one-liner installer (Linux/macOS)
 #   install.ps1  — the one-liner installer (Windows PowerShell)
 #   doax.ps1     — the Windows launcher install.ps1 puts on PATH
@@ -29,6 +30,9 @@ cp "$ROOT/infra/site/doax.ps1" "$OUT/doax.ps1"
 
 # Render the playbooks (playbook/**) into one page served at /playbook
 node "$ROOT/infra/build-playbook.mjs"
+
+# Render the specification (docs/spec/registry-v0.1.md) into the page served at /spec
+node "$ROOT/infra/build-spec.mjs"
 
 cd "$ROOT"
 pnpm -w exec esbuild "$ROOT/apps/doax-cli/src/main.ts" \
