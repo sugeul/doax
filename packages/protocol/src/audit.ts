@@ -24,10 +24,15 @@ export type AuditEventClass = (typeof AUDIT_EVENT_CLASSES)[number];
 
 export const ANONYMOUS_ACTOR = "anonymous";
 
+/**
+  * Where an event was observed. The CLI writes `caller-device` events to its own LOCAL log
+  * only (spec §8.3); the central audit log the Registry keeps has two writers — an Executor
+  * Resource (`executor`), for the dispatched work it answered, and the Registry (`registry`),
+  * for its own surface (spec §8.2).
+  */
 export type AuditExecutionLocation =
     | { kind: "caller-device"; deviceId: string }
     | { kind: "executor"; executor: string }
-    /** Events the Registry Server writes about its own surface (sign-in, publish, resolve). */
     | { kind: "registry"; registry: string };
 
 /** Mandatory event fields (spec §8.4). Events are append-only once written (spec §8.1). */

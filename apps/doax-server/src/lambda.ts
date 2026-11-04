@@ -675,6 +675,15 @@ app.post("/audit", async (c) => {
         if (typeof event.resource !== "string" || !event.resource.startsWith(`${reporter.resource}@`)) {
             return c.json(withManifesto(DOMAIN, { error: `event ${index}: this token reports for ${reporter.resource}@<version> only` }), 403);
         }
+        const loc = event.executionLocation as { kind?: unknown } | undefined;
+        if (!loc || loc.kind !== "executor") {
+            return c.json(
+                withManifesto(DOMAIN, {
+                    error: `event ${index}: the central audit log accepts only Executor Resource events (executionLocation.kind "executor", §8.2); caller-device work stays in the CLI's local log (§8.3)`,
+                }),
+                400,
+            );
+        }
         const missing = missingFields(event);
         if (missing.length) {
             return c.json(
@@ -711,8 +720,14 @@ app.post(TOKENS_PATH, async (c) => {
     const namespace = c.req.param("ns").slice(1);
     const name = c.req.param("name");
     await ensureSchema();
-    const exists = await db!.query(`SELECT 1 FROM manifests WHERE namespace = $1 AND name = $2 LIMIT 1`, [namespace, name]);
-    if (exists.rows.length === 0) return c.json(withManifesto(DOMAIN, { error: `not found: @${namespace}/${name}` }), 404);
+    const existing = await db!.query<{ kind: string }>(`SELECT kind FROM manifests WHERE namespace = $1 AND name = $2 LIMIT 1`, [namespace, name]);
+    if (existing.rows.length === 0) return c.json(withManifesto(DOMAIN, { error: `not found: @${namespace}/${name}` }), 404);
+    if (existing.rows[0]!.kind !== "executor") {
+        return c.json(
+            withManifesto(DOMAIN, { error: `@${namespace}/${name} is ${existing.rows[0]!.kind}, not an executor; only Executor Resources write the central audit log (§8.2)` }),
+            409,
+        );
+    }
     const who = await resourceManager(c, namespace, name);
     if (!who) return c.json(withManifesto(DOMAIN, { error: `only a manager of @${namespace}/${name} may issue its tokens` }), 403);
     const { tokenId, token } = await mintResourceToken(namespace, name, who);
@@ -893,8 +908,9 @@ app.put("/:ns{@[a-z0-9._-]+}/:namever", async (c) => {
         }),
     );
     await appendAudit([registryEvent("publish", identity, actor, { digest })]);
-    // Creating a resource mints its token (spec §8.2a): returned once, held by the resource from then on.
-    const resourceToken = created ? await mintResourceToken(namespace!, name!, actor) : undefined;
+    // Only an Executor Resource writes the central audit log (§8.2), so only it is minted a token,
+    // once, on creation. Caller-device resources are covered by the CLI's local log (§8.3).
+    const resourceToken = created && manifest.kind === "executor" ? await mintResourceToken(namespace!, name!, actor) : undefined;
     return c.json(
         withManifesto(DOMAIN, {
             published: identity,

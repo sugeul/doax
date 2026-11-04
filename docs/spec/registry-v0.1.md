@@ -150,7 +150,7 @@ Every Resource MUST expose the **Fixed Interface**: a closed, pre-determined set
 | `capabilities` | executor | Return what this Executor Resource can run: network reach, credential kinds held, concurrency limit, scheduling support, current load | 6A.2 |
 | `dispatch` | executor | Run a named Resource operation (`read`, `dry-run`, or `execute`) on this Executor Resource on behalf of the dispatching Principal | 6A.3 |
 
-Every operation receives, in its context, the **caller** it is answering: the caller's device identifier, or the Executor Resource that dispatched it. The Resource records the caller in its own audit (§8.2a).
+Every operation receives, in its context, the **caller** it is answering: the caller's device identifier, or the Executor Resource that dispatched it. An Executor Resource records the caller when it writes its audit (§8.2a).
 
 Any operation MAY respond with a **step-up** signal instead of a result (§7.4). The Executor MUST treat a step-up as a Fixed Interface response, not as an error.
 
@@ -496,17 +496,16 @@ An Auth Server's role is limited to asserting **who the Principal is and which n
 - Each namespace declares an **audit destination**: the Private Registry's own audit store, or none (local-only on the Executor).
 - When a destination is declared, every Executor acting within that namespace MUST deliver its events there. An Executor that cannot deliver MUST buffer locally and MUST refuse to discard buffered events.
 - An Auth Server MUST NOT be an audit destination for Resource invocations.
-- The audit store holds three records, each written by the party that observed the act, so each carries that party's level of trust:
+- The central audit store has two writers, each recording what it observed, so each carries that party's level of trust:
   - **Registry record.** The Registry writes what it observes itself: sign-in, token issue and revocation, resolve, search, publish, yank, and audit query.
-  - **Resource record.** Each Resource writes that it answered a caller: which operation, for which caller, and with what result (§8.2a).
-  - **Executor Resource record.** An Executor Resource writes who used it to run which Resource (`dispatch`, §6A.3). It does not stand in for the target Resource's own record.
-- What an Executor CLI records about work on the caller's device is the caller's own report. It is not delivered to the audit destination; the reference CLI keeps it locally (`~/.doax/audit.jsonl`).
+  - **Executor Resource record.** An Executor Resource writes the work it answered on behalf of a caller — which operation, for which caller, with what result (§8.2a) — and a `dispatch` record of who used it to run which Resource (§6A.3).
+- Work that runs on the caller's device is **not** written to the central store. The Executor CLI records it as the caller's own report and keeps it locally (`~/.doax/audit.jsonl`, §8.3); it is never delivered.
 
 ### 8.2a Resource audit
 
-Every Resource MUST write an audit event to its Registry for each Fixed Interface operation it answers (§4.6): `authenticate`, `metadata`, `read`, `dry-run`, `execute`, and `dispatch` for an Executor Resource, and also for a recovery action it runs or a step-up it demands. This record is the Resource's own statement that it answered a given caller, and it is required whether the Resource runs on the caller's device or on a trusted executor.
+An **Executor Resource** MUST write an audit event to its Registry for each Fixed Interface operation it answers (§4.6): `authenticate`, `metadata`, `read`, `dry-run`, `execute`, and `dispatch`, and also for a recovery action it runs or a step-up it demands. This record is the Executor Resource's own statement that it answered a given caller. A Resource that runs on the caller's device does **not** write to the central store; that work is covered by the Executor CLI's local report (§8.3). Accordingly, the Registry accepts an ingested event only when its *execution location* is `executor`.
 
-**Authentication.** A Resource writes with a **resource token**. The Registry mints the token when the Resource is created, that is, at the first publish of `@namespace/name`. It returns the token once, in the publish response, and from then on the Resource holds it. The Registry stores only the token's hash. A manager of the Resource can issue a further token, to rotate it or after a leak, and can revoke any token. The managers are the operator; in a claimed namespace, its owners and publishers; and in a shared namespace, whoever published a version of that Resource. A token is scoped to `@namespace/name` and covers every version. Issuing or revoking a token is a Registry `auth` event. The Registry MUST refuse an event that comes without a live resource token, or whose `resource` is not a version of the token's Resource. On every event it accepts, the Registry records which token reported it.
+**Authentication.** An Executor Resource writes with a **resource token**. The Registry mints the token when such a Resource is created, that is, at the first publish of an `executor`-kind `@namespace/name`; it is not minted for caller-device Resources. It returns the token once, in the publish response, and from then on the Resource holds it. The Registry stores only the token's hash. A manager of the Resource can issue a further token, to rotate it or after a leak, and can revoke any token. The managers are the operator; in a claimed namespace, its owners and publishers; and in a shared namespace, whoever published a version of that Resource. A token is scoped to `@namespace/name` and covers every version. Issuing or revoking a token is a Registry `auth` event. The Registry MUST refuse an event that comes without a live resource token, or whose `resource` is not a version of the token's Resource. On every event it accepts, the Registry records which token reported it.
 
 **Mandatory content.** Beyond §8.4, each event MUST carry:
 
@@ -595,7 +594,7 @@ The Executor MUST:
 6. Honor any runtime step-up by re-entering steps 4 and 5 at the stronger Tier.
 7. Offer dry-run when the Action declares a mode other than `none`; warn when it declares `none`.
 8. Generate the idempotency key for `execute`/`recover`.
-9. Record every mandatory audit event (§8.3) locally, as the caller's own report (§8.2), and pass the caller to each operation so the Resource can write its own record (§4.6, §8.2a).
+9. Record every mandatory audit event (§8.3) locally, as the caller's own report (§8.2), and pass the caller to each operation so an Executor Resource can write its own record (§4.6, §8.2a).
 10. Manage the local credential cache (§7.6).
 
 ### 9.2 Behavioral guarantees
