@@ -150,6 +150,8 @@ Every Resource MUST expose the **Fixed Interface**: a closed, pre-determined set
 | `capabilities` | executor | Return what this Executor Resource can run: network reach, credential kinds held, concurrency limit, scheduling support, current load | 6A.2 |
 | `dispatch` | executor | Run a named Resource operation (`read`, `dry-run`, or `execute`) on this Executor Resource on behalf of the dispatching Principal | 6A.3 |
 
+Every operation receives, in its context, the **caller** it is answering: the caller's device identifier, or the Executor Resource that dispatched it. The Resource records the caller in its own audit (§8.2a).
+
 Any operation MAY respond with a **step-up** signal instead of a result (§7.4). The Executor MUST treat a step-up as a Fixed Interface response, not as an error.
 
 **MCP as implementation protocol.** A Resource's Package MAY be an MCP server, over any MCP transport. The Registry MUST fully support publishing, resolving, and executing MCP-based Resources. However:
@@ -385,7 +387,7 @@ An Executor Resource is a Resource of kind `executor`. It describes one organiza
 2. Refuses if the target Resource is declared `caller-device` (§6.5 rule 1), if its executor requirements (§6A.5) are not met by this machine, or if its own resource constraints exclude it.
 3. Resolves and fetches the target Resource through the Private Registry, verifying integrity, exactly as the Executor CLI would.
 4. Obtains credentials through the target's referenced Authenticator (subject `organization`) using material it holds, then runs the requested operation.
-5. Emits a `dispatch` audit event and, for the target operation, the corresponding `data-read`, `dry-run`, or `execute` event, linked to the `dispatch` event (§8.4). Both events carry the Executor Resource's identity in *execution location* and the consumed CPU time in *executor cpu time*.
+5. Emits a `dispatch` audit event: who used this machine to run which Resource's operation (§8.2). The target Resource writes its own record of answering, with this Executor Resource as *caller* (§8.2a), linked to the `dispatch` event (§8.4). Both events carry the Executor Resource's identity in *execution location* and the consumed CPU time in *executor cpu time*.
 6. Returns the operation's result, or a declared fault class, to the Executor CLI.
 
 The `dispatch` operation MAY accept a schedule when `capabilities` reports scheduling support. A scheduled dispatch emits one `dispatch` event at scheduling time and one linked set of events at each run.
@@ -494,6 +496,33 @@ An Auth Server's role is limited to asserting **who the Principal is and which n
 - Each namespace declares an **audit destination**: the Private Registry's own audit store, or none (local-only on the Executor).
 - When a destination is declared, every Executor acting within that namespace MUST deliver its events there. An Executor that cannot deliver MUST buffer locally and MUST refuse to discard buffered events.
 - An Auth Server MUST NOT be an audit destination for Resource invocations.
+- The audit store holds three records, each written by the party that observed the act, so each carries that party's level of trust:
+  - **Registry record.** The Registry writes what it observes itself: sign-in, token issue and revocation, resolve, search, publish, yank, and audit query.
+  - **Resource record.** Each Resource writes that it answered a caller: which operation, for which caller, and with what result (§8.2a).
+  - **Executor Resource record.** An Executor Resource writes who used it to run which Resource (`dispatch`, §6A.3). It does not stand in for the target Resource's own record.
+- What an Executor CLI records about work on the caller's device is the caller's own report. It is not delivered to the audit destination; the reference CLI keeps it locally (`~/.doax/audit.jsonl`).
+
+### 8.2a Resource audit
+
+Every Resource MUST write an audit event to its Registry for each Fixed Interface operation it answers (§4.6): `authenticate`, `metadata`, `read`, `dry-run`, `execute`, and `dispatch` for an Executor Resource, and also for a recovery action it runs or a step-up it demands. This record is the Resource's own statement that it answered a given caller, and it is required whether the Resource runs on the caller's device or on a trusted executor.
+
+**Authentication.** A Resource writes with a **resource token**. The Registry mints the token when the Resource is created, that is, at the first publish of `@namespace/name`. It returns the token once, in the publish response, and from then on the Resource holds it. The Registry stores only the token's hash. A manager of the Resource can issue a further token, to rotate it or after a leak, and can revoke any token. The managers are the operator; in a claimed namespace, its owners and publishers; and in a shared namespace, whoever published a version of that Resource. A token is scoped to `@namespace/name` and covers every version. Issuing or revoking a token is a Registry `auth` event. The Registry MUST refuse an event that comes without a live resource token, or whose `resource` is not a version of the token's Resource. On every event it accepts, the Registry records which token reported it.
+
+**Mandatory content.** Beyond §8.4, each event MUST carry:
+
+| Operation | Fields |
+|---|---|
+| all | *caller*: the device identifier, or the Executor Resource, that the Resource answered, as passed in the operation's context (§4.6); *outcome* with a reason code drawn from the declared fault classes (§13.2) |
+| `authenticate` | *authenticator* (the Resource's own identity) and mode. Credential material MUST NOT be recorded. |
+| `metadata` | *source freshness*: the `lastRefreshed` value reported |
+| `read` | *source freshness*: the `freshness` value of the response (§5.7); *record count*: the number of records returned; *time range*: the time range the returned records cover; *continued*: whether `continuation` was returned, i.e. the result was partial |
+| `dry-run` | *target*; *dry-run flag*: mode, and `estimated` when predictive |
+| `execute` | *target*; *idempotency key*; *external reference*: the identifier the target system assigned to the effect (for example, a created message's id) |
+| recovery | as for `execute`, plus *linked event*: the `execute` event being compensated |
+| step-up | the tier requested |
+| `dispatch` | the dispatched Resource and operation, and the dispatching Principal as *actor* (§6A.6) |
+
+A Resource MUST NOT omit a mandatory field because it cannot tell the value. It MUST record the value as `unknown`. A missing field and an unknown value are different facts: only an explicit `unknown` shows that the Resource looked and could not tell. The Registry MUST refuse an event that omits a mandatory field.
 
 ### 8.3 Mandatory event classes
 
@@ -525,7 +554,7 @@ Every event MUST record:
 | timestamp | Time the event occurred, as observed by the writer |
 | class | One of §8.3 |
 | actor | Principal identity, or anonymous marker for Tier 4 |
-| execution location | `caller-device` with the device identifier, or the Executor Resource identity `@namespace/name@version` |
+| execution location | `caller-device` with the device identifier, the Executor Resource identity `@namespace/name@version`, or `registry` with the Registry's domain for events the Registry Server writes about its own surface (sign-in, publish, resolve, audit query) |
 | executor cpu time | For every event emitted by an Executor Resource: CPU time consumed by the operation on that machine, as reported by the machine. Absent for events emitted by an Executor CLI. |
 | resource | `@namespace/name@version`; for `auth` events from `authenticate`, the Authenticator's identity |
 | authenticator | For `data-read`, `dry-run`, `execute`, `recover`, `dispatch`: the Authenticator whose credentials were used, or `none` |
@@ -534,7 +563,10 @@ Every event MUST record:
 | outcome | `success`, `failure`, `partial`, with a Resource-supplied reason code |
 | idempotency key | For `execute` and `recover` |
 | dry-run flag | For `dry-run`: mode, and `estimated` marker when mode is `predictive` |
-| source freshness | For `data-read` and `metadata-read`: the `lastRefreshed` value reported by the source |
+| source freshness | For `data-read` and `metadata-read`: the `lastRefreshed` value reported by the source, or `unknown` |
+| record count / time range / continued | For `data-read`: how many records were returned, the time range they cover, and whether the result was partial (§8.2a) |
+| external reference | For `execute` and `recover`: the identifier the target system assigned to the effect, or `unknown` |
+| caller / reporter | For Resource records (§8.2a): the caller the Resource answered, and the resource token that delivered the event (the Registry sets the reporter) |
 | linked event | For `recover`: the id of the `execute` event being compensated. For `approve`/`reject`: the pending `execute` event. For `data-read`, `dry-run`, or `execute` run on an Executor Resource: the `dispatch` event. |
 | upstream origin | For `resolve` and `fetch` from an Upstream: the Upstream's identity |
 
@@ -563,7 +595,7 @@ The Executor MUST:
 6. Honor any runtime step-up by re-entering steps 4 and 5 at the stronger Tier.
 7. Offer dry-run when the Action declares a mode other than `none`; warn when it declares `none`.
 8. Generate the idempotency key for `execute`/`recover`.
-9. Emit every mandatory audit event (§8.3) to the namespace's declared destination, buffering on failure.
+9. Record every mandatory audit event (§8.3) locally, as the caller's own report (§8.2), and pass the caller to each operation so the Resource can write its own record (§4.6, §8.2a).
 10. Manage the local credential cache (§7.6).
 
 ### 9.2 Behavioral guarantees
@@ -591,7 +623,8 @@ The Registry Server MUST provide the following capabilities over HTTPS with JSON
 | Deprecate / Yank | Lifecycle transitions per §4.4. |
 | Namespace management | Create namespace, set visibility defaults, set Tier floor, set audit destination, set Upstream reference policy, manage grant lists. |
 | Verification | Operator or delegated reviewer sets verification status. |
-| Audit ingest | Accept events from Executors. Append-only. |
+| Audit ingest | Accept Resource records (§8.2a) under a resource token, refusing events for other Resources or events with mandatory fields missing. Append-only. |
+| Resource tokens | Issue, list, and revoke a Resource's audit tokens, for its managers (§8.2a). |
 | Audit query | Per §8.5. |
 | Upstream proxy | When configured, resolve and fetch Resources from an Upstream on behalf of the caller, cache them, apply local policy (block, pin version, require `verified`), and record `upstream origin` in audit. |
 

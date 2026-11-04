@@ -7,6 +7,7 @@ import { type CliConfig, loadCliConfig } from "@doax/config";
 import { formatResourceRef, parseResourceRef, type Tier } from "@doax/protocol";
 import {
     audit,
+    authHeaders,
     baseEvent,
     confirmTier,
     credentialKey,
@@ -19,6 +20,7 @@ import {
     purgeCredentials,
     readCredentials,
     readRegistryMap,
+    registryFor,
     type ResolvedResource,
     resolveResource,
     tokenFor,
@@ -56,6 +58,9 @@ Usage:
                                               --web opens the registry's sign-in page and catches the token on loopback
     doax logout [--registry <url>]            Drop the stored token
     doax whoami                               Show your principal and namespaces
+    doax resource-token issue|list <@ns/name> Issue another audit token (the first comes with the first publish), or list them
+    doax resource-token revoke <@ns/name> <token-id>
+                                              Revoke one; the resource can no longer write audit with it
     doax audit [--class <c>] [--actor <a>] [--resource <@ns/name>] [--since <iso>] [--limit <n>]
                                               Query the audit log for your namespaces (owners see their events)
     doax --version | --help
@@ -68,7 +73,7 @@ Every command runs non-interactively for agent callers:
 
 Registries: the CLI holds a list of registries and resolves each entity from the one that owns
 its namespace (doax registry add @corp https://registry.corp.internal). Unrouted namespaces use
-the default registry. Audit for a resource is delivered to the registry it came from.
+the default registry. What the CLI runs is audited locally, in ~/.doax/audit.jsonl.
 
 Environment:
     DOAX_REGISTRY   Default registry origin (default: https://registry.doax.io).
@@ -210,6 +215,8 @@ export async function run(argv: string[], deps: CliDeps = defaultDeps()): Promis
             }
             case "whoami":
                 return await whoamiCmd(deps, json);
+            case "resource-token":
+                return await resourceTokenCmd(deps, rest, json);
             default:
                 return { exitCode: 2, stderr: `doax: unknown command "${command}"\n` + USAGE };
         }
@@ -316,14 +323,24 @@ async function publishCmd(deps: CliDeps, rest: string[], json: boolean): Promise
         headers,
         body: JSON.stringify({ manifest, package: pkg.toString("base64") }),
     });
-    const body = (await res.json()) as { published?: string; digest?: string; error?: string; fix?: string };
+    const body = (await res.json()) as {
+        published?: string;
+        digest?: string;
+        error?: string;
+        fix?: string;
+        resourceToken?: { tokenId: string; token: string };
+    };
     if (!res.ok) {
         const msg = `${body.error ?? res.status}${body.fix ? `\n  fix: ${body.fix}` : ""}`;
         return { exitCode: 1, stderr: json ? JSON.stringify({ ok: false, ...body }) : `doax publish: ${msg}` };
     }
+    // A first publish creates the resource and returns its audit token, once (spec §8.2a).
+    const minted = body.resourceToken
+        ? `\n  resource token ${body.resourceToken.tokenId} (shown once; the resource holds it to write its audit):\n  ${body.resourceToken.token}`
+        : "";
     return {
         exitCode: 0,
-        stdout: json ? JSON.stringify({ ok: true, ...body }) : `published ${body.published}\n  digest ${body.digest}\n  at ${origin}`,
+        stdout: json ? JSON.stringify({ ok: true, ...body }) : `published ${body.published}\n  digest ${body.digest}\n  at ${origin}${minted}`,
     };
 }
 
@@ -490,6 +507,42 @@ async function whoamiCmd(deps: CliDeps, json: boolean): Promise<CliResult> {
     return { exitCode: 0, stdout: json ? JSON.stringify({ ok: true, ...body }) : `${body.principal} @ ${origin}\nnamespaces: ${(body.namespaces ?? []).join(", ") || "none"}` };
 }
 
+/** Resource tokens (spec §8.2a): the credential a Resource writes its own audit with. */
+async function resourceTokenCmd(deps: CliDeps, rest: string[], json: boolean): Promise<CliResult> {
+    const [sub, refInput, tokenId] = rest;
+    if (!refInput || !["issue", "list", "revoke"].includes(sub ?? "") || (sub === "revoke" && !tokenId)) {
+        return { exitCode: 2, stderr: "doax resource-token: expected `issue <@ns/name>`, `list <@ns/name>`, or `revoke <@ns/name> <token-id>`" };
+    }
+    const ref = parseResourceRef(refInput);
+    const xdeps = executorDeps(deps);
+    const origin = registryFor(xdeps, ref.namespace);
+    const auth = authHeaders(xdeps, origin);
+    if (!auth.authorization) return { exitCode: 1, stderr: `doax resource-token: not logged in to ${origin}; run doax login` };
+    const path = `${origin}/@${ref.namespace}/${ref.name}/tokens`;
+    const res =
+        sub === "issue"
+            ? await deps.fetch(path, { method: "POST", headers: auth })
+            : sub === "revoke"
+              ? await deps.fetch(`${path}/${tokenId}`, { method: "DELETE", headers: auth })
+              : await deps.fetch(path, { headers: auth });
+    const body = (await res.json()) as {
+        error?: string;
+        token?: string;
+        tokenId?: string;
+        revoked?: string;
+        tokens?: { tokenId: string; issuedBy: string; createdAt: string; revokedAt: string | null }[];
+    };
+    if (!res.ok) return { exitCode: 1, stderr: json ? JSON.stringify({ ok: false, error: body.error ?? res.status }) : `doax resource-token: ${body.error ?? res.status}` };
+    if (json) return { exitCode: 0, stdout: JSON.stringify({ ok: true, ...body }) };
+    if (sub === "issue") return { exitCode: 0, stdout: `token ${body.tokenId} for @${ref.namespace}/${ref.name} (shown once):\n${body.token}` };
+    if (sub === "revoke") return { exitCode: 0, stdout: `revoked ${body.revoked}` };
+    if (!body.tokens?.length) return { exitCode: 0, stdout: "no tokens" };
+    return {
+        exitCode: 0,
+        stdout: body.tokens.map((t) => `${t.tokenId}  issued by ${t.issuedBy} · ${t.createdAt}${t.revokedAt ? ` · revoked ${t.revokedAt}` : ""}`).join("\n"),
+    };
+}
+
 /** Audit query (spec §8.5): your token sees your namespaces; the operator token sees all. */
 async function auditCmd(deps: CliDeps, values: Record<string, unknown>, json: boolean): Promise<CliResult> {
     const xdeps = executorDeps(deps);
@@ -627,14 +680,14 @@ async function acquireCredential(deps: ExecutorDeps, authResolved: ResolvedResou
             storedAt: new Date().toISOString(),
         };
         writeCredential(deps, credentialKey(authResolved.identity), entry);
-        await audit(deps, [
+        audit(deps, [
             baseEvent(deps, "auth", authResolved.identity, effective, { status: "success", reasonCode: "ok" }, { authenticator: authResolved.identity }),
-        ], authResolved.origin);
+        ]);
         return entry;
     } catch (err) {
-        await audit(deps, [
+        audit(deps, [
             baseEvent(deps, "auth", authResolved.identity, effective, { status: "failure", reasonCode: fault(err) }, { authenticator: authResolved.identity }),
-        ], authResolved.origin);
+        ]);
         throw err;
     }
 }
@@ -741,14 +794,14 @@ async function readCmd(deps: CliDeps, refInput: string | undefined, values: Reco
     try {
         const result = (await invokeOperation(module, resolved, operation, paramsToInput(values.param), { credential })) as Record<string, unknown>;
         const freshness = (result.freshness ?? (result.metadata as { lastRefreshed?: string } | undefined)?.lastRefreshed) as string | undefined;
-        await audit(xdeps, [
+        audit(xdeps, [
             baseEvent(xdeps, eventClass, resolved.identity, effective, { status: "success", reasonCode: "ok" }, { authenticator, sourceFreshness: freshness }),
-        ], resolved.origin);
+        ]);
         return { exitCode: 0, stdout: JSON.stringify(result, null, 2) };
     } catch (err) {
-        await audit(xdeps, [
+        audit(xdeps, [
             baseEvent(xdeps, eventClass, resolved.identity, effective, { status: "failure", reasonCode: fault(err) }, { authenticator }),
-        ], resolved.origin);
+        ]);
         throw err;
     }
 }
@@ -768,19 +821,19 @@ async function executeCmd(deps: CliDeps, refInput: string | undefined, values: R
         if (dryRunMode === "none") return { exitCode: 1, stderr: `doax execute: ${resolved.identity} declares dry-run mode "none"` };
         try {
             const result = await invokeOperation(module, resolved, "dry-run", input, { credential });
-            await audit(xdeps, [
+            audit(xdeps, [
                 baseEvent(xdeps, "dry-run", resolved.identity, effective, { status: "success", reasonCode: "ok" }, {
                     authenticator,
                     dryRun: { mode: dryRunMode as "predictive" | "native", estimated: dryRunMode === "predictive" },
                 }),
-            ], resolved.origin);
+            ]);
             if (json) return { exitCode: 0, stdout: JSON.stringify({ ok: true, estimated: dryRunMode === "predictive", mode: dryRunMode, result }) };
             const label = dryRunMode === "predictive" ? "ESTIMATED (predictive dry-run; not guaranteed by the target)" : "native dry-run";
             return { exitCode: 0, stdout: `${label}\n${JSON.stringify(result, null, 2)}` };
         } catch (err) {
-            await audit(xdeps, [
+            audit(xdeps, [
                 baseEvent(xdeps, "dry-run", resolved.identity, effective, { status: "failure", reasonCode: fault(err) }, { authenticator }),
-            ], resolved.origin);
+            ]);
             throw err;
         }
     }
@@ -792,14 +845,14 @@ async function executeCmd(deps: CliDeps, refInput: string | undefined, values: R
     const idempotencyKey = randomUUID();
     try {
         const result = await invokeOperation(module, resolved, "execute", input, { credential, idempotencyKey });
-        await audit(xdeps, [
+        audit(xdeps, [
             baseEvent(xdeps, "execute", resolved.identity, effective, { status: "success", reasonCode: "ok" }, { authenticator, idempotencyKey }),
-        ], resolved.origin);
+        ]);
         return { exitCode: 0, stdout: JSON.stringify(result, null, 2) };
     } catch (err) {
-        await audit(xdeps, [
+        audit(xdeps, [
             baseEvent(xdeps, "execute", resolved.identity, effective, { status: "failure", reasonCode: fault(err) }, { authenticator, idempotencyKey }),
-        ], resolved.origin);
+        ]);
         throw err;
     }
 }

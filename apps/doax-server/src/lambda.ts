@@ -12,7 +12,7 @@ import { DeleteObjectCommand, HeadBucketCommand, PutObjectCommand, S3Client } fr
 import { SendEmailCommand, SESv2Client } from "@aws-sdk/client-sesv2";
 import pg from "pg";
 import { MOUNTS } from "@doax/config";
-import { buildManifesto, withManifesto } from "@doax/protocol";
+import { ANONYMOUS_ACTOR, buildManifesto, withManifesto } from "@doax/protocol";
 
 /**
   * The global registry's registry-API service (one of its professional services): the first
@@ -98,6 +98,18 @@ function ensureSchema(): Promise<void> {
                 attempts   INT NOT NULL DEFAULT 0,
                 expires_at TIMESTAMPTZ NOT NULL,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            );
+            -- Who published a version: in @global, the only basis for managing that resource.
+            ALTER TABLE manifests ADD COLUMN IF NOT EXISTS published_by TEXT;
+            -- Resource tokens (spec §8.2a): a Resource's own credential for writing its audit.
+            -- Scoped to @namespace/name, every version; revoked, never deleted.
+            CREATE TABLE IF NOT EXISTS resource_tokens (
+                token_hash TEXT PRIMARY KEY,
+                namespace  TEXT NOT NULL,
+                name       TEXT NOT NULL,
+                issued_by  TEXT NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                revoked_at TIMESTAMPTZ
             );
             -- @global: the shared namespace every authenticated principal may publish into.
             INSERT INTO principals (principal_id, display_name) VALUES ('operator', 'registry operator')
@@ -199,6 +211,30 @@ async function appendAudit(events: AuditInput[]): Promise<string[]> {
         }),
     );
     return prepared.map((p) => p.eventId);
+}
+
+/** Who the registry itself saw act: a fresh inbox proof is tier 1, a held token tier 3, nobody tier 4. */
+type RegistryActor = { actor: string; tier: 1 | 3 | 4 };
+const byToken = (principal: string | null): RegistryActor => (principal ? { actor: principal, tier: 3 } : { actor: ANONYMOUS_ACTOR, tier: 4 });
+const BY_OPERATOR: RegistryActor = { actor: "operator", tier: 3 };
+
+/** An event about the registry's own surface, in the shape executors write (spec §8.4). */
+function registryEvent(
+    eventClass: string,
+    resource: string,
+    who: RegistryActor,
+    extra: { outcome?: "success" | "failure"; reasonCode?: string; [field: string]: unknown } = {},
+): AuditInput {
+    const { outcome = "success", reasonCode = outcome === "success" ? "ok" : "rejected", ...rest } = extra;
+    return {
+        class: eventClass,
+        actor: who.actor,
+        resource,
+        executionLocation: { kind: "registry", registry: DOMAIN },
+        effectiveTier: { tier: who.tier, strengthenedBy: [] },
+        outcome: { status: outcome, reasonCode },
+        ...rest,
+    };
 }
 
 const IDENTITY = /^@([a-z0-9][a-z0-9._-]*)\/([a-z0-9][a-z0-9._-]*)(?:@([^@\s/]+))?$/;
@@ -369,13 +405,15 @@ app.post("/auth/session", async (c) => {
     );
     const row = rows[0];
     if (!(row && !row.expired && row.attempts <= 5 && row.code_hash === hashToken(code))) {
-        await appendAudit([{ class: "auth", actor: email, resource: "registry:app-session", mode: "verify", outcome: "failure" }]);
+        await appendAudit([
+            registryEvent("auth", "registry:app-session", { actor: ANONYMOUS_ACTOR, tier: 1 }, { mode: "verify", target: email, outcome: "failure" }),
+        ]);
         return c.json(withManifesto(DOMAIN, { error: "code invalid, expired, or too many attempts" }), 401);
     }
     await db!.query(`DELETE FROM email_logins WHERE email = $1`, [email]);
     await db!.query(`INSERT INTO principals (principal_id, display_name) VALUES ($1, $1) ON CONFLICT DO NOTHING`, [email]);
     c.header("set-cookie", await sessionCookieFor(email));
-    await appendAudit([{ class: "auth", actor: email, resource: "registry:app-session", mode: "verify", outcome: "success" }]);
+    await appendAudit([registryEvent("auth", "registry:app-session", { actor: email, tier: 1 }, { mode: "verify" })]);
     return c.json(withManifesto(DOMAIN, { ok: true, principal: email }));
 });
 
@@ -384,7 +422,7 @@ app.get("/auth/session", async (c) => {
     const principal = await principalFrom(c);
     if (!principal) return c.json(withManifesto(DOMAIN, { error: "requires a Bearer token" }), 401);
     c.header("set-cookie", await sessionCookieFor(principal));
-    await appendAudit([{ class: "auth", actor: principal, resource: "registry:app-session", mode: "issue" }]);
+    await appendAudit([registryEvent("auth", "registry:app-session", byToken(principal), { mode: "issue" })]);
     return c.json(withManifesto(DOMAIN, { ok: true, principal }));
 });
 
@@ -416,7 +454,7 @@ app.post("/auth/email", async (c) => {
             },
         }),
     );
-    await appendAudit([{ class: "auth", actor: email, resource: "registry:email-login", mode: "code-sent" }]);
+    await appendAudit([registryEvent("auth", "registry:email-login", byToken(null), { mode: "code-sent", target: email })]);
     return c.json(withManifesto(DOMAIN, { sent: true, email, expiresInMinutes: 10 }));
 });
 
@@ -437,14 +475,16 @@ app.post("/auth/verify", async (c) => {
     const row = rows[0];
     const ok = row && !row.expired && row.attempts <= 5 && row.code_hash === hashToken(code);
     if (!ok) {
-        await appendAudit([{ class: "auth", actor: email, resource: "registry:email-login", mode: "verify", outcome: "failure" }]);
+        await appendAudit([
+            registryEvent("auth", "registry:email-login", { actor: ANONYMOUS_ACTOR, tier: 1 }, { mode: "verify", target: email, outcome: "failure" }),
+        ]);
         return c.json(withManifesto(DOMAIN, { error: "code invalid, expired, or too many attempts — request a new one" }), 401);
     }
     await db!.query(`DELETE FROM email_logins WHERE email = $1`, [email]);
     await db!.query(`INSERT INTO principals (principal_id, display_name) VALUES ($1, $1) ON CONFLICT DO NOTHING`, [email]);
     const token = `doax_pat_${randomUUID().replaceAll("-", "")}${randomUUID().replaceAll("-", "")}`;
     await db!.query(`INSERT INTO access_tokens (token_hash, principal_id, note) VALUES ($1, $2, 'email login')`, [hashToken(token), email]);
-    await appendAudit([{ class: "auth", actor: email, resource: "registry:email-login", mode: "verify", outcome: "success" }]);
+    await appendAudit([registryEvent("auth", "registry:email-login", { actor: email, tier: 1 }, { mode: "verify" })]);
     return c.json(withManifesto(DOMAIN, { principal: email, token, note: "store this token; it is not shown again" }), 201);
 });
 
@@ -473,7 +513,7 @@ app.post("/principals", async (c) => {
         body.principalId,
         "issued by operator",
     ]);
-    await appendAudit([{ class: "auth", actor: body.principalId, resource: "registry:token", mode: "issue" }]);
+    await appendAudit([registryEvent("auth", "registry:token", BY_OPERATOR, { mode: "issue", target: body.principalId })]);
     return c.json(withManifesto(DOMAIN, { principal: body.principalId, token, note: "store this token; it is not shown again" }), 201);
 });
 
@@ -552,7 +592,7 @@ app.get("/search", async (c) => {
          LIMIT 50`,
         [q, like, kind ?? null],
     );
-    await appendAudit([{ class: "resolve", actor: "anonymous", resource: `search:${q || "*"}` }]);
+    await appendAudit([registryEvent("resolve", `search:${q || "*"}`, byToken(await principalFrom(c)))]);
     const results = rows.map((row) => ({
         ...resolveBody(row),
         ns: `@${row.namespace}`,
@@ -566,19 +606,152 @@ app.get("/search", async (c) => {
     return c.json(withManifesto(DOMAIN, { query: q, results }));
 });
 
-/** Audit ingest (spec §10, §8.2). Append-only; the query side dedupes redelivered eventIds. */
+/* ---------- resource audit (spec §8.2a): each Resource reports what it answered, under its own token ---------- */
+
+const tokenIdOf = (tokenHash: string) => tokenHash.slice(0, 16);
+
+/** The `@namespace/name` a resource token speaks for, or null when missing, unknown, or revoked. */
+async function resourceFrom(c: { req: { header(name: string): string | undefined } }): Promise<{ resource: string; tokenId: string } | null> {
+    const match = /^Bearer\s+(doax_rt_\S+)$/i.exec(c.req.header("authorization") ?? "");
+    if (!match) return null;
+    await ensureSchema();
+    const hash = hashToken(match[1]!);
+    const { rows } = await db!.query<{ namespace: string; name: string }>(
+        `SELECT namespace, name FROM resource_tokens WHERE token_hash = $1 AND revoked_at IS NULL`,
+        [hash],
+    );
+    return rows[0] ? { resource: `@${rows[0].namespace}/${rows[0].name}`, tokenId: tokenIdOf(hash) } : null;
+}
+
+/**
+  * Who may manage a resource's tokens: the operator; in a claimed namespace its owners and
+  * publishers; in @global (where anyone may publish) only whoever published a version of it.
+  */
+async function resourceManager(c: Parameters<typeof principalFrom>[0], namespace: string, name: string): Promise<RegistryActor | null> {
+    if (isAdmin(c)) return BY_OPERATOR;
+    const principal = await principalFrom(c);
+    if (!principal) return null;
+    const allowed = SHARED_NAMESPACES.has(`@${namespace}`)
+        ? (await db!.query(`SELECT 1 FROM manifests WHERE namespace = $1 AND name = $2 AND published_by = $3 LIMIT 1`, [namespace, name, principal]))
+              .rows.length > 0
+        : await hasRole(principal, namespace, ["owner", "publisher"]);
+    return allowed ? byToken(principal) : null;
+}
+
+/** Operations a Resource answers, and what each must carry besides `caller` and `outcome` (spec §8.2a). */
+const RESOURCE_REPORT_FIELDS: Record<string, string[]> = {
+    auth: ["authenticator"],
+    "metadata-read": ["sourceFreshness"],
+    "data-read": ["sourceFreshness", "recordCount", "timeRange", "continued"],
+    "dry-run": ["target", "dryRun"],
+    execute: ["target", "idempotencyKey", "externalRef"],
+    recover: ["target", "idempotencyKey", "externalRef", "linkedEvent"],
+    "step-up": ["requestedTier"],
+    dispatch: ["dispatchedResource", "dispatchedOperation"],
+};
+
+/** Missing mandatory fields of one resource report; an unknown value is the string "unknown", never an omission. */
+function missingFields(event: Record<string, unknown>): string[] {
+    const required = ["caller", "outcome", ...(RESOURCE_REPORT_FIELDS[event.class as string] ?? [])];
+    return required.filter((field) => event[field] === undefined || event[field] === null);
+}
+
+/**
+  * Audit ingest (spec §10, §8.2a): Resources, and Executor Resources for `dispatch`, report the
+  * operations they answered. A resource token is required, and it speaks for its own resource
+  * only. Append-only; the query side dedupes redelivered eventIds.
+  */
 app.post("/audit", async (c) => {
+    const reporter = await resourceFrom(c);
+    if (!reporter) return c.json(withManifesto(DOMAIN, { error: "audit ingest requires a resource token (Bearer doax_rt_...)" }), 401);
     const body = (await c.req.json().catch(() => null)) as { events?: Record<string, unknown>[] } | null;
-    if (!body || !Array.isArray(body.events) || body.events.length === 0) {
-        return c.json(withManifesto(DOMAIN, { error: "body must be { events: [...] }" }), 400);
+    if (!body || !Array.isArray(body.events) || body.events.length === 0 || body.events.length > 100) {
+        return c.json(withManifesto(DOMAIN, { error: "body must be { events: [...] }, 1 to 100 events" }), 400);
     }
-    for (const event of body.events) {
-        if (typeof event.class !== "string" || typeof event.actor !== "string" || typeof event.resource !== "string") {
-            return c.json(withManifesto(DOMAIN, { error: "each event needs class, actor, resource" }), 400);
+    for (const [index, event] of body.events.entries()) {
+        if (typeof event.class !== "string" || !(event.class in RESOURCE_REPORT_FIELDS)) {
+            return c.json(withManifesto(DOMAIN, { error: `event ${index}: class must be one of ${Object.keys(RESOURCE_REPORT_FIELDS).join(", ")}` }), 400);
+        }
+        if (typeof event.resource !== "string" || !event.resource.startsWith(`${reporter.resource}@`)) {
+            return c.json(withManifesto(DOMAIN, { error: `event ${index}: this token reports for ${reporter.resource}@<version> only` }), 403);
+        }
+        const missing = missingFields(event);
+        if (missing.length) {
+            return c.json(
+                withManifesto(DOMAIN, { error: `event ${index} (${event.class}) is missing ${missing.join(", ")}`, fix: 'send "unknown" for a value the resource cannot tell' }),
+                400,
+            );
         }
     }
-    const accepted = await appendAudit(body.events as AuditInput[]);
+    const accepted = await appendAudit(
+        body.events.map((event) => ({
+            ...event,
+            class: event.class as string,
+            resource: event.resource as string,
+            actor: typeof event.actor === "string" ? event.actor : ANONYMOUS_ACTOR,
+            reporter: { kind: "resource", resource: reporter.resource, tokenId: reporter.tokenId },
+        })),
+    );
     return c.json(withManifesto(DOMAIN, { accepted }));
+});
+
+/** Mint a resource token and record the issue. The token is returned once; only its hash is kept. */
+async function mintResourceToken(namespace: string, name: string, who: RegistryActor): Promise<{ tokenId: string; token: string }> {
+    const token = `doax_rt_${randomUUID().replaceAll("-", "")}${randomUUID().replaceAll("-", "")}`;
+    const hash = hashToken(token);
+    await db!.query(`INSERT INTO resource_tokens (token_hash, namespace, name, issued_by) VALUES ($1, $2, $3, $4)`, [hash, namespace, name, who.actor]);
+    await appendAudit([registryEvent("auth", `@${namespace}/${name}`, who, { mode: "resource-token-issue", target: tokenIdOf(hash) })]);
+    return { tokenId: tokenIdOf(hash), token };
+}
+
+const TOKENS_PATH = "/:ns{@[a-z0-9._-]+}/:name{[a-z0-9][a-z0-9._-]*}/tokens";
+
+/** Issue another resource token (rotation, or after a leak). The one minted at creation comes with the first publish. */
+app.post(TOKENS_PATH, async (c) => {
+    const namespace = c.req.param("ns").slice(1);
+    const name = c.req.param("name");
+    await ensureSchema();
+    const exists = await db!.query(`SELECT 1 FROM manifests WHERE namespace = $1 AND name = $2 LIMIT 1`, [namespace, name]);
+    if (exists.rows.length === 0) return c.json(withManifesto(DOMAIN, { error: `not found: @${namespace}/${name}` }), 404);
+    const who = await resourceManager(c, namespace, name);
+    if (!who) return c.json(withManifesto(DOMAIN, { error: `only a manager of @${namespace}/${name} may issue its tokens` }), 403);
+    const { tokenId, token } = await mintResourceToken(namespace, name, who);
+    return c.json(
+        withManifesto(DOMAIN, { resource: `@${namespace}/${name}`, tokenId, token, note: "store this token with the resource; it is not shown again" }),
+        201,
+    );
+});
+
+app.get(TOKENS_PATH, async (c) => {
+    const namespace = c.req.param("ns").slice(1);
+    const name = c.req.param("name");
+    await ensureSchema();
+    if (!(await resourceManager(c, namespace, name))) {
+        return c.json(withManifesto(DOMAIN, { error: `only a manager of @${namespace}/${name} may list its tokens` }), 403);
+    }
+    const { rows } = await db!.query<{ token_hash: string; issued_by: string; created_at: Date; revoked_at: Date | null }>(
+        `SELECT token_hash, issued_by, created_at, revoked_at FROM resource_tokens WHERE namespace = $1 AND name = $2 ORDER BY created_at`,
+        [namespace, name],
+    );
+    const tokens = rows.map((r) => ({ tokenId: tokenIdOf(r.token_hash), issuedBy: r.issued_by, createdAt: r.created_at, revokedAt: r.revoked_at }));
+    return c.json(withManifesto(DOMAIN, { resource: `@${namespace}/${name}`, tokens }));
+});
+
+app.delete(`${TOKENS_PATH}/:id{[0-9a-f]{16}}`, async (c) => {
+    const namespace = c.req.param("ns").slice(1);
+    const name = c.req.param("name");
+    const id = c.req.param("id");
+    await ensureSchema();
+    const who = await resourceManager(c, namespace, name);
+    if (!who) return c.json(withManifesto(DOMAIN, { error: `only a manager of @${namespace}/${name} may revoke its tokens` }), 403);
+    const revoked = await db!.query(
+        `UPDATE resource_tokens SET revoked_at = now()
+         WHERE namespace = $1 AND name = $2 AND left(token_hash, 16) = $3 AND revoked_at IS NULL RETURNING token_hash`,
+        [namespace, name, id],
+    );
+    if (revoked.rowCount === 0) return c.json(withManifesto(DOMAIN, { error: `no live token ${id} for @${namespace}/${name}` }), 404);
+    await appendAudit([registryEvent("auth", `@${namespace}/${name}`, who, { mode: "resource-token-revoke", target: id })]);
+    return c.json(withManifesto(DOMAIN, { resource: `@${namespace}/${name}`, revoked: id }));
 });
 
 /**
@@ -588,8 +761,8 @@ app.post("/audit", async (c) => {
 app.get("/audit", async (c) => {
     const admin = isAdmin(c);
     let scope: string[] | null = null; // null = unscoped (operator)
+    const principal = admin ? null : await principalFrom(c);
     if (!admin) {
-        const principal = await principalFrom(c);
         if (!principal) return c.json(withManifesto(DOMAIN, { error: "audit query requires a Bearer token or the operator token" }), 401);
         scope = await namespacesOf(principal, ["owner", "publisher", "reader"]);
         if (scope.length === 0) return c.json(withManifesto(DOMAIN, { error: `${principal} belongs to no namespaces` }), 403);
@@ -644,6 +817,15 @@ app.get("/audit", async (c) => {
         }
         truncated = true; // page budget exhausted while a token remains
     }
+    // Querying the audit log is itself a data-read against a system Data Source (spec §8.5).
+    const filters = Object.fromEntries(Object.entries(q).filter(([key, value]) => key !== "limit" && value));
+    await appendAudit([
+        registryEvent("data-read", "registry:audit", admin ? BY_OPERATOR : byToken(principal), {
+            target: scope ? scope.join(",") : "*",
+            filters,
+            returned: Math.min(events.length, q.limit),
+        }),
+    ]);
     return c.json(withManifesto(DOMAIN, { count: events.length, truncated, events: events.slice(0, q.limit) }));
 });
 
@@ -670,7 +852,7 @@ app.put("/:ns{@[a-z0-9._-]+}/:namever", async (c) => {
             );
         }
     }
-    const actor = principal ?? "operator";
+    const actor = admin ? BY_OPERATOR : byToken(principal);
 
     const body = (await c.req.json().catch(() => null)) as { manifest?: Record<string, unknown>; package?: string } | null;
     if (!body?.manifest || typeof body.package !== "string") {
@@ -687,16 +869,18 @@ app.put("/:ns{@[a-z0-9._-]+}/:namever", async (c) => {
     // Immutability (spec §4.4): a version can be created once, never replaced. The force
     // header is a PRE-PUBLIC escape hatch for re-seeding, OPERATOR-ONLY; removed at public launch.
     const force = admin && c.req.header("x-doax-admin-force") === "true";
+    const created =
+        (await db!.query(`SELECT 1 FROM manifests WHERE namespace = $1 AND name = $2 LIMIT 1`, [namespace, name])).rows.length === 0;
     const inserted = await db!.query(
         force
-            ? `INSERT INTO manifests (namespace, name, version, kind, manifest, digest)
-               VALUES ($1, $2, $3, $4, $5, $6)
+            ? `INSERT INTO manifests (namespace, name, version, kind, manifest, digest, published_by)
+               VALUES ($1, $2, $3, $4, $5, $6, $7)
                ON CONFLICT (namespace, name, version)
                DO UPDATE SET kind = EXCLUDED.kind, manifest = EXCLUDED.manifest, digest = EXCLUDED.digest, published_at = now()
                RETURNING version`
-            : `INSERT INTO manifests (namespace, name, version, kind, manifest, digest)
-               VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING RETURNING version`,
-        [namespace, name, version, manifest.kind, JSON.stringify(manifest), digest],
+            : `INSERT INTO manifests (namespace, name, version, kind, manifest, digest, published_by)
+               VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT DO NOTHING RETURNING version`,
+        [namespace, name, version, manifest.kind, JSON.stringify(manifest), digest, actor.actor],
     );
     if (inserted.rowCount === 0) return c.json(withManifesto(DOMAIN, { error: `${identity} already exists (immutable, §4.4)` }), 409);
 
@@ -708,8 +892,18 @@ app.put("/:ns{@[a-z0-9._-]+}/:namever", async (c) => {
             ContentType: "text/javascript; charset=utf-8",
         }),
     );
-    await appendAudit([{ class: "publish", actor, resource: identity, digest }]);
-    return c.json(withManifesto(DOMAIN, { published: identity, digest, package: `/${packageKey(identity)}` }), 201);
+    await appendAudit([registryEvent("publish", identity, actor, { digest })]);
+    // Creating a resource mints its token (spec §8.2a): returned once, held by the resource from then on.
+    const resourceToken = created ? await mintResourceToken(namespace!, name!, actor) : undefined;
+    return c.json(
+        withManifesto(DOMAIN, {
+            published: identity,
+            digest,
+            package: `/${packageKey(identity)}`,
+            ...(resourceToken && { resourceToken: { ...resourceToken, note: "held by the resource for its audit; not shown again" } }),
+        }),
+        201,
+    );
 });
 
 /*
@@ -774,7 +968,7 @@ app.put("/apps/:ns{@[a-z0-9._-]+}", async (c) => {
             }),
         );
     }
-    await appendAudit([{ class: "publish", actor: principal ?? "operator", resource: `app:${ns}`, files: body.files.length }]);
+    await appendAudit([registryEvent("publish", `app:${ns}`, admin ? BY_OPERATOR : byToken(principal), { files: body.files.length })]);
     return c.json(withManifesto(DOMAIN, { deployed: ns, files: body.files.length, url: `https://${slug}.${APP_HOST}/` }), 201);
 });
 
@@ -796,7 +990,7 @@ app.delete("/:ns{@[a-z0-9._-]+}/:namever", async (c) => {
     ]);
     if (gone.rowCount === 0) return c.json(withManifesto(DOMAIN, { error: `not found: ${identity}` }), 404);
     await s3.send(new DeleteObjectCommand({ Bucket: PACKAGES_BUCKET, Key: packageKey(identity) }));
-    await appendAudit([{ class: "yank", actor: "operator", resource: identity, note: "pre-public unpublish" }]);
+    await appendAudit([registryEvent("yank", identity, BY_OPERATOR, { note: "pre-public unpublish" })]);
     return c.json(withManifesto(DOMAIN, { unpublished: identity }));
 });
 
@@ -825,7 +1019,7 @@ app.get("/:ns{@[a-z0-9._-]+}/:namever", async (c) => {
         }
     }
 
-    await appendAudit([{ class: "resolve", actor: principal ?? "anonymous", resource: `@${row.namespace}/${row.name}@${row.version}` }]);
+    await appendAudit([registryEvent("resolve", `@${row.namespace}/${row.name}@${row.version}`, byToken(principal))]);
     const body = resolveBody(row);
     return c.json(
         withManifesto(DOMAIN, row.lifecycle === "deprecated" ? { ...body, warning: `${body.identity} is deprecated` } : body),
