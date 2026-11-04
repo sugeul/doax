@@ -2,7 +2,7 @@
 
 # doax
 
-**Delegated Operation, Attested eXecution** — the registry of data and action resources that AI agents use on behalf of a human.
+**Delegation of Object Access and eXecution** — the registry of data and action resources that AI agents use on behalf of a human.
 
 Resolve · verify · tier · invoke · audit. Like npm, but for what an agent is allowed to do.
 

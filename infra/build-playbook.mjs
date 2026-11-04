@@ -84,7 +84,7 @@ function shell(title, crumbHtml, bodyHtml, { desc } = {}) {
 <meta name="description" content="${esc(desc ?? "Playbooks for building apps on the doax registry.")}">
 <style>${STYLE}</style></head><body>
 <header class="nav"><div class="nav-in">
-<a class="brand" href="/"><span class="ring"></span> doax <small>Delegated Operation, Attested eXecution</small></a>
+<a class="brand" href="/"><span class="ring"></span> doax <small>Delegation of Object Access and eXecution</small></a>
 <span class="sp"></span><a class="ghost" href="/playbook">Playbooks</a>
 <a class="ghost" href="/install">Install CLI</a>
 <a class="ghost" href="https://registry.doax.io" target="_blank" rel="noopener">registry.doax.io ↗</a>
