@@ -41,10 +41,13 @@ The Registry is modeled on package registries (npm, Docker Hub, GitHub) rather t
 | **Registry Server** | The service that stores Manifests, resolves Resources, enforces namespace visibility, and ingests audit events. |
 | **Code Repository** | The service that stores Packages by immutable version. |
 | **Auth Server** | Whatever issues Registry tokens (§7.2) for a given Registry. The public Registry's Auth Server uses Google Sign-In; a Private Registry MAY run any Auth Server that issues conforming tokens. |
-| **Executor CLI** | The client on a caller's device that fetches a Resource, runs the authorization flow, invokes the Resource or dispatches it to an Executor Resource, and reports audit events. In v1 a Linux CLI. |
+| **Executor CLI** | The client on a caller's device that fetches a Resource, runs the authorization flow, invokes the Resource or dispatches it to an Executor Resource, and keeps the caller's own audit log. In v1 a command-line program. |
 | **Executor Resource** | A Resource of kind `executor`: an organization-operated machine registered in the Registry that accepts dispatched work. Where this document says "trusted executor", it means an Executor Resource. |
+| **Provider** | The service that answers a `server`-location Resource's operations (§6.5), operated by or for its namespace's owner. A namespace MAY register its Providers with the Registry (§10); a registered Provider enforces Tier and approvals itself (§6.5) and writes the audit of every `server` Resource of its namespace under its own service identity (§8.2a). |
+| **Application** | A program other than an Executor CLI or an Executor Resource that invokes a `server` Resource on a Principal's behalf: a web portal, a hosted app, a service. A Provider records it as the *caller* (§4.6, §8.2a). |
+| **Approval** | One human decision bound to one exact request of a gated Action (§6.4): a signed, single-use artifact issued by the Registry that a Provider checks before `execute`. |
 | **Principal** | An authenticated human or service account. |
-| **Caller** | The Principal on whose behalf a Resource is being invoked. |
+| **Caller** | The Principal on whose behalf a Resource is being invoked. In an operation's context (§4.6), the party that presented the invocation: a device, an Executor Resource, or an Application. |
 | **Tier** | One of the four authentication tiers defined in §7. |
 | **Private Registry** | A Registry Server instance operated by one organization, typically on-premises. |
 | **Upstream** | A public Registry that a Private Registry may reference for Resources outside its own namespaces. |
@@ -60,14 +63,15 @@ The Registry is modeled on package registries (npm, Docker Hub, GitHub) rather t
 | Registry Server | Manifest storage, search, resolution, namespace and visibility policy, verification status, audit ingestion, audit query | MUST expose its API over HTTPS and return JSON response bodies |
 | Code Repository | Immutable storage and retrieval of Packages by `@namespace/name@version`; integrity verification | MUST guarantee that a published version is never modified or deleted (see §4.4) |
 | Auth Server | Token issuance, refresh, and revocation for one Registry | MUST issue tokens conforming to §7.2. The reference implementation shipped with the public Registry authenticates with Google Sign-In; a Private Registry MAY substitute its own. |
+| Provider (optional, per namespace) | Answers the `server` Resources of one namespace: verifies the caller's token, applies Tier and approvals, writes their audit (§6.5, §8.2a) | MUST accept only tokens issued for its own audience (§7.2) and MUST write audit only for Resources of its namespace |
 
-The three server components MAY be deployed as one process or as separate processes. This document treats them as logically distinct.
+The three server components MAY be deployed as one process or as separate processes. This document treats them as logically distinct. A Provider is operated by the namespace owner, not by the Registry operator; the Registry knows it by its registered identity (§10).
 
 ### 3.2 Executor side
 
 | Component | Responsibility |
 |---|---|
-| Executor CLI (Linux) | Resolve a Resource, verify Package integrity, run the authorization flow for the Resource's effective Tier, invoke the Resource locally or dispatch it to an Executor Resource, emit audit events, manage local credential cache |
+| Executor CLI | Resolve a Resource, verify Package integrity, run the authorization flow for the Resource's effective Tier, invoke the Resource locally or dispatch it to an Executor Resource, keep the caller's local audit log, manage local credential cache |
 | Executor Resource (organization-operated) | Accept dispatched work for Resources declared `trusted-executor`, run them with organization-held credentials, emit audit events including consumed CPU time |
 
 The Executor CLI is the **only** component that touches end-user personal credentials for external systems. Executor Resources hold organization credentials only. See §7.6 and §6.5.
@@ -150,7 +154,7 @@ Every Resource MUST expose the **Fixed Interface**: a closed, pre-determined set
 | `capabilities` | executor | Return what this Executor Resource can run: network reach, credential kinds held, concurrency limit, scheduling support, current load | 6A.2 |
 | `dispatch` | executor | Run a named Resource operation (`read`, `dry-run`, or `execute`) on this Executor Resource on behalf of the dispatching Principal | 6A.3 |
 
-Every operation receives, in its context, the **caller** it is answering: the caller's device identifier, or the Executor Resource that dispatched it. An Executor Resource records the caller when it writes its audit (§8.2a).
+Every operation receives, in its context, the **caller** it is answering: the caller's device identifier, the Executor Resource that dispatched it, or the Application (§2) that invoked a `server` Resource. A server-side Resource records the caller when it writes its audit (§8.2a), as `unknown` when the context did not carry one.
 
 Any operation MAY respond with a **step-up** signal instead of a result (§7.4). The Executor MUST treat a step-up as a Fixed Interface response, not as an error.
 
@@ -335,9 +339,15 @@ Recovery is explicitly **not** an undo. It is a forward action with its own effe
 - A recovery action MUST itself be a registered Action with its own Manifest, Tier, dry-run, idempotency, and audit declarations.
 - Executing a recovery action MUST produce its own audit event, linked to the original execution's event (§8.4).
 
-### 6.4 Human-in-the-loop gating
+### 6.4 Human-in-the-loop gating and the approval artifact
 
-An Action MAY declare that execution requires an out-of-band approval (for example, a button in a corporate messenger). Such an Action MUST declare Tier 1 or Tier 2 (§7.3). The approval itself is an audit event (§8.3).
+An Action MAY declare that execution requires an out-of-band approval. Such an Action MUST declare Tier 1 or Tier 2 (§7.3). The approval is an audit event (§8.3), and for a `server` Resource it is also an **artifact** the Provider can check: one human decision bound to one exact request.
+
+1. **Request hash.** On `dry-run`, the Provider computes the request hash: `sha256` of the canonical JSON (keys sorted recursively, no whitespace) of `{resource: "@namespace/name", operation: "execute", input: <the normalized input>}`. It then asks the Registry for an approval, giving the Resource, the operation, the request hash, the Principal who is to decide (*requested for*), and a plain-language summary of what will happen. Only a registered Provider (§10) MAY ask, so the summary a person approves is the Provider's, not the agent's.
+2. **Decision.** The Registry returns an approval id and a page. The person named decides there with a **fresh interactive sign-in**: an identity-provider credential minted moments ago, not a Registry token. An agent that holds the Principal's token therefore cannot decide. The Registry records an `approve` or `reject` event (§8.3) linked to the approval id, and the decision stands once; it cannot be changed. An undecided approval expires after a period the Registry declares.
+3. **Consumption.** On `execute`, the caller passes the approval id. The Provider fetches the approval from the Registry with its own identity and receives a **signed approval token** carrying the approval id, the approver, the Resource, the operation, the request hash, the Provider as audience, and an expiry. The Provider MUST accept it only if the signature, audience, Resource, operation, and request hash match the request in hand and the approver is the acting Principal, and MUST accept it **once**: an approval is single use, enforced by the Provider. A retry carrying a used approval returns the first result, which makes the approval the idempotency key of a gated `execute` (§6.2).
+
+The agent may prepare everything; only the person can make it happen. How the person is notified (a messenger, mail) is not specified (§14).
 
 ### 6.5 Execution location
 
@@ -347,9 +357,15 @@ Every Data Source, Action, and Authenticator MUST declare where it runs (an Exec
 |---|---|---|
 | `caller-device` | Runs on the caller's machine via the Executor CLI | Uses the caller's personal credentials, cached locally (§7.6). Audit events are reported by the Executor CLI into its local log and are NOT delivered to the central store (§8.2). |
 | `trusted-executor` | Runs on an Executor Resource (§6A) that matches the Resource's declared executor requirements | Uses organization-held system credentials. Audit events are produced by the Executor Resource that ran it. |
-| `server` | The Resource is its own hosted service — a server, Lambda, or MCP endpoint its publisher operates — invoked directly over its binding, not dispatched | Uses credentials the server holds. The server produces its own audit events, under its own resource token (§8.2a). |
+| `server` | The Resource is its own hosted service — a server, Lambda, or MCP endpoint its publisher operates (its Provider, §2) — invoked directly over its binding, not dispatched | Uses credentials the server holds. The server produces its own audit events, under its resource token or its Provider's identity (§8.2a). |
 
 `trusted-executor` and `server` differ in who provides the runtime: a shared §6A Executor Resource for the former, the Resource's own operator for the latter. Both run server-side and write the central audit; only `caller-device` work stays off it. Scheduled or unattended Actions (for example, nightly data refresh) MUST declare `trusted-executor` or `server`.
+
+**Enforcement for `server` Resources.** The Executor CLI's authorization flow (§9.1) runs on the caller's device, which the caller controls: a browser can be edited and a CLI run with a flag that answers its own prompts. That is acceptable for reads of public data and not for writes to a system of record. A `server` Resource therefore MUST NOT rely on it. Its Provider is the enforcing party and MUST, on every invocation it serves: verify the caller's token (§7.2), including that the token was issued for this Provider; map the request to a Resource and operation; apply the Resource's declared Tier from a Manifest it trusts (its own published Manifest, pinned by digest); require an approval (§6.4) where the effective Tier is 2 or stronger; and write the audit event itself (§8.2a). The Executor CLI's checks stay in force for what the Executor does; they are the first gate, not the last. A `server` Resource invoked by an Application (§2) is held to the same rules, with the Application as *caller*.
+
+### 6.6 Out-of-band payloads
+
+An Action whose input or output is bulk data (a file, a ledger, an export) MAY move the bytes outside the invocation: the operation covers the control steps (issuing a short-lived reference to upload or download, confirming completion), and the bytes travel directly between the caller and storage the Provider controls. Such an Action MUST declare this in its Manifest. The reference MUST be short-lived and bound to one invocation, and the `execute` event MUST record the payload's size and digest as the Provider observed them (§8.2a), so that the audit names exactly which bytes the Action processed.
 
 **Execution location is a constraint, not a preference.** The following rules exist to resist the pressure to move device-runnable work onto shared machines, which would concentrate personal credentials centrally, blur the audit actor, and turn shared machines into everyone's bottleneck:
 
@@ -439,7 +455,19 @@ The token MUST carry:
 
 The token MUST NOT carry per-Resource permissions. Per-Resource decisions belong to the Private Registry (Tier, visibility) and per-record decisions to the Data Source (§5.1).
 
-A Registry Server declares which issuers it trusts. The public Registry trusts its reference Auth Server; a Private Registry trusts its own and, when it references an Upstream (§12.2), MAY also trust the Upstream's issuer for Upstream resolution only. Namespace policy MAY shorten the effective lifetime of a token below its expiry; nothing MAY lengthen it.
+The token SHOULD also carry, and a Registry that registers Providers (§10) MUST issue:
+
+| Claim | Content |
+|---|---|
+| Audience | Where the token may be presented: the Registry itself, or one Provider by its registered name. A token without an audience is a Registry token. The Registry MUST refuse a Provider-audience token; a Provider MUST refuse every audience but its own. |
+| Channel | What kind of client the token was issued to: an executor (an Executor CLI or Executor Resource) or a web Application. |
+| Method | How the token was obtained: a sign-in at the Registry, an exchange (below), or another registered way. |
+
+A Provider-audience token is obtained by **exchange**: a holder of a Registry token asks the Auth Server for a token for one Provider, typically inside that Provider's Authenticator (`authenticate` exchanges; `refresh` exchanges again). Provider tokens SHOULD be short-lived (hours); Registry tokens MAY be long-lived (days). A Provider copies the audience, channel, and method of the token it accepted into the audit events it writes (§8.4). The audience says *where* a token may be presented; the Provider still decides *what* the Principal may do.
+
+A Registry Server declares which issuers it trusts. The public Registry trusts its reference Auth Server; a Private Registry trusts its own and, when it references an Upstream (§12.2), MAY also trust the Upstream's issuer for Upstream resolution only. A Registry that serves several organizations MAY register trusted issuers **per namespace** (§10): a token from a namespace's registered issuer is admitted for that namespace, so that each organization keeps its own identity provider and the issuer stays a component outside the Resource graph (§7.5). Namespace policy MAY shorten the effective lifetime of a token below its expiry; nothing MAY lengthen it.
+
+An Auth Server MUST publish the material needed to verify its tokens offline (its public keys) at a location the Registry advertises without a token.
 
 ### 7.3 The four Tiers
 
@@ -448,7 +476,7 @@ Tiers are ordered from strongest (Tier 1) to weakest (Tier 4).
 | Tier | Name | Behavior at invocation time |
 |---|---|---|
 | 1 | Interactive authentication | The caller MUST authenticate interactively (a login or consent prompt is shown) at every invocation. |
-| 2 | Long-lived authentication, per-call authorization check | A valid long-lived token suffices for identity; the Registry (or the Resource) MUST confirm authorization for this specific invocation before proceeding. |
+| 2 | Long-lived authentication, per-call authorization check | A valid long-lived token suffices for identity; authorization for this specific invocation MUST be confirmed before proceeding. For a `caller-device` Resource the Executor CLI asks the caller (§9.1); for a `server` Resource the Provider requires an approval (§6.4) that the Executor cannot produce on its own. |
 | 3 | Long-lived authentication, no per-call check | A valid long-lived token suffices; no further check is made. The audit record is the only control. |
 | 4 | Unauthenticated execution | No Principal is required. The Executor MUST still record an audit event with an anonymous actor marker. |
 
@@ -477,10 +505,29 @@ An Auth Server's role is limited to asserting **who the Principal is and which n
 
 ### 7.6 Credential handling
 
-- Credentials for external systems (the caller's login to a ticketing site, an ERP, a SaaS) MUST be stored only on the device where execution occurs: the caller's device for `caller-device` Resources, the trusted executor machine for `trusted-executor` Resources.
+- Credentials for external systems (the caller's login to a ticketing site, an ERP, a SaaS) MUST be stored only on the device where execution occurs: the caller's device for `caller-device` Resources, the trusted executor machine for `trusted-executor` Resources, the Provider's own systems for `server` Resources.
 - Such credentials MUST NOT be transmitted to or stored by the Registry Server, the Code Repository, or the Auth Server.
 - The cache is keyed by caller and Authenticator, never by Resource, so that every Resource referencing the same Authenticator uses the same cached material and a purge of one Authenticator's material affects all of them at once.
 - The Executor MUST provide a command to list cached credentials by Authenticator, showing which Resources reference each, and to purge them.
+
+### 7.7 Interactive Registry login from an Executor CLI
+
+§9.1 has the Executor CLI obtain a Registry token "through whatever login that Auth Server uses". An Auth Server that signs people in only on a web page (Google Sign-In, an organization's SSO) would leave the caller copying a token from that page into a terminal. The following closes that gap the way `gh auth login --web` and `gcloud auth login` do: the CLI opens the page, and the page hands the token back to a listener on the caller's own machine (a loopback redirect, RFC 8252 §7.3).
+
+**Discovery.** A Registry MUST declare its login methods at a location reachable without a token (§10, *login discovery*): a list drawn from `web`, `email`, and `token`, and for `web` the path of its login page. A Registry that does not answer is taken to offer `email` and `token`.
+
+**The login page** signs the person in however its Auth Server does. It takes two query parameters:
+
+| Parameter | Rule |
+|---|---|
+| `callback` | MUST be `http://127.0.0.1:<port>/<path>` or `http://localhost:<port>/<path>`. Anything else (another host, `https`, userinfo, a missing port) MUST be refused with an error on the page; the token is never sent. |
+| `state` | MUST be present with `callback`: 22 to 128 characters of `[A-Za-z0-9_-]`, drawn by the CLI from at least 128 bits of entropy. Echoed back unchanged. |
+
+After a successful sign-in the page delivers the token by a **top-level form POST** (`application/x-www-form-urlencoded`, fields `token` and `state`) to `callback`. It MUST NOT put the token in a URL: a query or fragment is kept in browser history and leaks through logs. A page opened without `callback` shows the token to copy, which is also the fallback when the browser runs on another machine than the CLI. A sign-in that fails is reported on the page and never reaches the callback.
+
+**The CLI** reads the login methods and stops if `web` is not offered; listens on the loopback interface at an OS-assigned port and one random path; opens the browser at the login page with `callback` and `state` (and always prints the URL); waits for **one** POST to that path whose `state` matches, answering every other request with an error without ending the wait; then closes the listener, verifies the token against the Registry, and stores it as it would a pasted token. The wait has a timeout (default 300 seconds).
+
+**Why this is safe.** The token goes from the browser to a listener bound to the loopback interface only, and the Registry refuses any callback that would send it elsewhere, so a crafted link cannot exfiltrate it. `state` binds the response to this CLI run, so another local page or process cannot inject its own token. A form POST keeps the token out of the address bar, history, and referrers. Nothing here changes the token (§7.2) or who may sign in: the page is the Auth Server's own login, and the CLI only saves the copying.
 
 ---
 
@@ -494,30 +541,35 @@ An Auth Server's role is limited to asserting **who the Principal is and which n
 
 ### 8.2 Central collection per namespace policy
 
-- Each namespace declares an **audit destination**: the Private Registry's own audit store, or none (local-only on the Executor).
-- When a destination is declared, every Executor acting within that namespace MUST deliver its events there. An Executor that cannot deliver MUST buffer locally and MUST refuse to discard buffered events.
+- Each namespace declares an **audit destination**: the Private Registry's own audit store, or none (local-only on the writer).
+- When a destination is declared, every server-side writer (§8.2a) acting within that namespace MUST deliver its events there. A writer that cannot deliver MUST buffer in a durable local log, MUST refuse to discard buffered events, and MUST redeliver them; redelivery is idempotent by event id.
 - An Auth Server MUST NOT be an audit destination for Resource invocations.
 - The central audit store is written by whoever ran the work server-side, each recording what it observed, so each carries that party's level of trust:
-  - **Registry record.** The Registry writes what it observes itself: sign-in, token issue and revocation, resolve, search, publish, yank, and audit query.
+  - **Registry record.** The Registry writes what it observes itself: sign-in, token issue and revocation, resolve, search, publish, yank, approvals, and audit query.
   - **Server-side Resource record.** A Resource that runs server-side — an Executor Resource (`trusted-executor`, §6A) or a self-hosted `server` Resource (§6.5) — writes the work it answered on behalf of a caller: which operation, for which caller, with what result (§8.2a). An Executor Resource additionally writes a `dispatch` record of who used it to run which Resource (§6A.3).
+  - **Provider record.** A registered Provider (§10) writes the server-side Resource record of every `server` Resource of its namespace under its own service identity, in place of per-Resource tokens (§8.2a). It is the same record with a different credential behind it.
 - Work that runs on the caller's device is **not** written to the central store. The Executor CLI records it as the caller's own report and keeps it locally (`~/.doax/audit.jsonl`, §8.3); it is never delivered.
 
 ### 8.2a Resource audit
 
 A **server-side Resource** — an Executor Resource (`trusted-executor`) or a self-hosted `server` Resource (§6.5) — MUST write an audit event to its Registry for each Fixed Interface operation it answers (§4.6): `authenticate`, `metadata`, `read`, `dry-run`, `execute`, and `dispatch`, and also for a recovery action it runs or a step-up it demands. This record is the Resource's own statement that it answered a given caller. A Resource that runs on the caller's device does **not** write to the central store; that work is covered by the Executor CLI's local report (§8.3). Accordingly, the Registry accepts an ingested event only when its *execution location* is `executor` or `server`.
 
-**Authentication.** A server-side Resource writes with a **resource token**. The Registry mints the token when such a Resource is created, that is, at the first publish of an `executor`-kind or `server`-location `@namespace/name`; it is not minted for caller-device Resources. It returns the token once, in the publish response, and from then on the Resource holds it. The Registry stores only the token's hash. A manager of the Resource can issue a further token, to rotate it or after a leak, and can revoke any token. The managers are the operator; in a claimed namespace, its owners and publishers; and in a shared namespace, whoever published a version of that Resource. A token is scoped to `@namespace/name` and covers every version. Issuing or revoking a token is a Registry `auth` event. The Registry MUST refuse an event that comes without a live resource token, or whose `resource` is not a version of the token's Resource. On every event it accepts, the Registry records which token reported it.
+**Authentication.** A server-side Resource writes with a **resource token**. The Registry mints the token when such a Resource is created, that is, at the first publish of an `executor`-kind or `server`-location `@namespace/name`; it is not minted for caller-device Resources. It returns the token once, in the publish response, and from then on the Resource holds it. The Registry stores only the token's hash. A manager of the Resource can issue a further token, to rotate it or after a leak, and can revoke any token. The managers are the operator; in a claimed namespace, its owners and publishers; and in a shared namespace, whoever published a version of that Resource. A token is scoped to `@namespace/name` and covers every version. Issuing or revoking a token is a Registry `auth` event.
+
+A namespace MAY instead register a **Provider** (§10): a service identity the Registry verifies by its own means (a platform-issued workload credential, a public key) that writes the records of every `server` Resource of that namespace. One credential the platform rotates replaces a secret per Resource to keep. A Provider's events are held to the same rules as resource-token events (server-side location, mandatory fields, `unknown` where it cannot tell) and MUST name Resources of its own namespace only.
+
+The Registry MUST refuse an event that comes with neither a live resource token for its Resource nor the identity of a Provider registered for its namespace, and an event whose `resource` is not a version of the token's Resource. On every event it accepts, the Registry records which credential delivered it: the resource token by id, the Provider by identity, or the Registry itself (*source* `resource`, `provider`, or `registry`; *reporter*, §8.4).
 
 **Mandatory content.** Beyond §8.4, each event MUST carry:
 
 | Operation | Fields |
 |---|---|
-| all | *caller*: the device identifier, or the Executor Resource, that the Resource answered, as passed in the operation's context (§4.6); *outcome* with a reason code drawn from the declared fault classes (§13.2) |
+| all | *caller*: the device identifier, the Executor Resource, or the Application (§2) that the Resource answered, as passed in the operation's context (§4.6), or `unknown`; *outcome* with a reason code drawn from the declared fault classes (§13.2) |
 | `authenticate` | *authenticator* (the Resource's own identity) and mode. Credential material MUST NOT be recorded. |
 | `metadata` | *source freshness*: the `lastRefreshed` value reported |
 | `read` | *source freshness*: the `freshness` value of the response (§5.7); *record count*: the number of records returned; *time range*: the time range the returned records cover; *continued*: whether `continuation` was returned, i.e. the result was partial |
-| `dry-run` | *target*; *dry-run flag*: mode, and `estimated` when predictive |
-| `execute` | *target*; *idempotency key*; *external reference*: the identifier the target system assigned to the effect (for example, a created message's id) |
+| `dry-run` | *target*; *dry-run flag*: mode, and `estimated` when predictive; for a gated Action (§6.4), the *approval* id requested |
+| `execute` | *target*; *idempotency key*; *external reference*: the identifier the target system assigned to the effect (for example, a created message's id); for a gated Action (§6.4), the *approval* id consumed; for an out-of-band payload (§6.6), the *payload* size and digest |
 | recovery | as for `execute`, plus *linked event*: the `execute` event being compensated |
 | step-up | the tier requested |
 | `dispatch` | the dispatched Resource and operation, and the dispatching Principal as *actor* (§6A.6) |
@@ -538,7 +590,7 @@ The following MUST produce an audit event:
 | `execute` | An Action is executed |
 | `dispatch` | Work is handed to an Executor Resource (§6A.3), including scheduling of a deferred run |
 | `recover` | A recovery action is executed |
-| `approve` / `reject` | A human-in-the-loop gate is decided (§6.4) |
+| `approve` / `reject` | A human-in-the-loop gate is decided by the person asked (§6.4) |
 | `step-up` | A Resource demands a stronger Tier at runtime (§7.4) |
 | `auth` | A Principal signs in to the Registry, a token is issued, refreshed, or revoked; or an Authenticator's `authenticate` operation is invoked (§4.7), recording the Authenticator, mode, and outcome only |
 | `publish` / `deprecate` / `yank` | A Resource version's lifecycle changes |
@@ -566,29 +618,32 @@ Every event MUST record:
 | source freshness | For `data-read` and `metadata-read`: the `lastRefreshed` value reported by the source, or `unknown` |
 | record count / time range / continued | For `data-read`: how many records were returned, the time range they cover, and whether the result was partial (§8.2a) |
 | external reference | For `execute` and `recover`: the identifier the target system assigned to the effect, or `unknown` |
-| caller / reporter | For Resource records (§8.2a): the caller the Resource answered, and the resource token that delivered the event (the Registry sets the reporter) |
-| linked event | For `recover`: the id of the `execute` event being compensated. For `approve`/`reject`: the pending `execute` event. For `data-read`, `dry-run`, or `execute` run on an Executor Resource: the `dispatch` event. |
+| caller / reporter | For Resource records (§8.2a): the caller the Resource answered, and the credential that delivered the event, a resource token by id or a Provider by identity (the Registry sets the reporter and its *source*) |
+| token audience / channel / method | For Resource records written by a Provider: the audience, channel, and method of the token it accepted (§7.2), so that portal use and executor use of the same Resource are told apart |
+| approval | For `dry-run` and `execute` of a gated Action (§6.4): the approval id requested or consumed |
+| payload | For `execute` with an out-of-band payload (§6.6): its size and digest as observed |
+| linked event | For `recover`: the id of the `execute` event being compensated. For `approve`/`reject`: the approval id, which identifies the request hash (§6.4); the `execute` that consumes it carries the same id in *approval*. For `data-read`, `dry-run`, or `execute` run on an Executor Resource: the `dispatch` event. |
 | upstream origin | For `resolve` and `fetch` from an Upstream: the Upstream's identity |
 
 ### 8.5 Audit query
 
-- The Registry Server MUST allow a namespace owner to query events by actor, resource, class, time range, outcome, and execution location, and to aggregate *executor cpu time* by actor and by resource.
+- The Registry Server MUST allow a namespace owner, and the Registry operator, to query events by actor, resource, class, time range, outcome, and execution location, and to aggregate *executor cpu time* by actor and by resource. Namespace policy MAY widen this to members.
 - Query access is itself a `data-read` against a system Data Source and MUST be audited.
 
 ---
 
-## 9. Executor (Linux CLI)
+## 9. Executor CLI
 
 ### 9.1 Responsibilities
 
 The Executor MUST:
 
-1. Obtain a Registry token (§7.2) from the Auth Server the configured Registry trusts, through whatever login that Auth Server uses, and hold it.
-2. Resolve a Resource against the configured Registry (Private first, Upstream if permitted). If the Resource is declared `trusted-executor`, resolve a matching Executor Resource (§6A.5) and route the operation through its `dispatch` instead of running it locally.
+1. Obtain a Registry token (§7.2) from the Auth Server the configured Registry trusts, through whatever login that Auth Server uses (§7.7 when it is a web page), and hold it.
+2. Resolve a Resource against the Registry that owns its namespace (§12.1; Private first, Upstream if permitted). If the Resource is declared `trusted-executor`, resolve a matching Executor Resource (§6A.5) and route the operation through its `dispatch` instead of running it locally. If it is declared `server`, invoke it over its binding with a token issued for its Provider (§7.2).
 3. Fetch the Package and verify its integrity digest against the Manifest before running anything.
 4. Compute the effective Tier (§7.4) and run the matching authorization flow:
    - Tier 1: open an interactive authentication surface (browser-based login or consent) and wait for completion.
-   - Tier 2: present the token, request per-call authorization confirmation, proceed only on confirmation.
+   - Tier 2: present the token, request per-call authorization confirmation from the caller, proceed only on confirmation. For a `server` Resource this confirmation does not stand in for the Provider's approval (§6.4, §6.5).
    - Tier 3: present the token, proceed.
    - Tier 4: proceed, mark actor as anonymous.
 5. Resolve the Resource's referenced Authenticator; if no cached credential exists for this caller and Authenticator (or the Tier requires it), call its `authenticate` in the appropriate mode, provide the interaction surface it requests, and cache the resulting material. Hand the material to the Resource's operations.
@@ -607,6 +662,7 @@ The Executor MUST:
 - The Executor CLI MUST NOT run a `trusted-executor` Resource locally, and MUST NOT ask an Executor Resource to run a `caller-device` Resource (§6.5).
 - The Executor CLI MUST NOT hand credential material from one Authenticator to a Resource that references a different Authenticator.
 - The Executor MUST invoke a Resource only through Fixed Interface operations mapped in its Manifest (§4.6). It MUST NOT enumerate or call unmapped MCP tools, even when the underlying server advertises them.
+- The Executor CLI MUST present a Registry token only to the Registry that issued it, and a Provider token only to that Provider (§7.2).
 
 ---
 
@@ -621,9 +677,13 @@ The Registry Server MUST provide the following capabilities over HTTPS with JSON
 | Executor matching | Given a `trusted-executor` Resource, return the Executor Resources visible to the caller whose `capabilities` satisfy its executor requirements (§6A.5), with current load. |
 | Publish | Accept a Package for a new version under a namespace the caller owns. Rejects duplicate versions. Emits `publish`. |
 | Deprecate / Yank | Lifecycle transitions per §4.4. |
-| Namespace management | Create namespace, set visibility defaults, set Tier floor, set audit destination, set Upstream reference policy, manage grant lists. |
+| Namespace management | Create namespace, set visibility defaults, set Tier floor, set audit destination, set Upstream reference policy, manage grant lists, register trusted issuers (§7.2) and Providers (§8.2a) for the namespace. |
 | Verification | Operator or delegated reviewer sets verification status. |
-| Audit ingest | Accept Resource records (§8.2a) under a resource token, refusing events for other Resources or events with mandatory fields missing. Append-only. |
+| Login discovery | Declare, without a token, the login methods the Auth Server offers and where its web login page is (§7.7). |
+| Verification material | Publish, without a token, the public material needed to verify its tokens offline (§7.2). |
+| Token exchange | Issue a Provider-audience token in exchange for a Registry token (§7.2). |
+| Approvals | Accept an approval request from a registered Provider, present it to the person named, record their decision as `approve` or `reject` under a fresh interactive sign-in, and hand the signed approval to the Provider (§6.4). |
+| Audit ingest | Accept Resource records (§8.2a) under a resource token or a registered Provider's identity, refusing events for other Resources or namespaces, events whose execution location is not server-side, and events with mandatory fields missing. Append-only. |
 | Resource tokens | Issue, list, and revoke a Resource's audit tokens, for its managers (§8.2a). |
 | Audit query | Per §8.5. |
 | Upstream proxy | When configured, resolve and fetch Resources from an Upstream on behalf of the caller, cache them, apply local policy (block, pin version, require `verified`), and record `upstream origin` in audit. |
@@ -638,10 +698,10 @@ Every JSON response produced by any network-reachable component of this system �
 
 - what this system is (one paragraph),
 - which component of it is responding, and who operates it,
-- where this specification is published,
-- where a newcomer should start (documentation, how to obtain an Executor CLI, how to sign in).
+- where this specification is published, and which version of it the component implements,
+- where a newcomer should start (documentation, how to obtain an Executor CLI, how to sign in to *this* Registry and route a namespace to it).
 
-It MAY contain anything else the operator finds helpful. It MUST NOT contain credentials or anything that varies by request, and nothing in this specification depends on its content for correctness: no client MUST read it, and no security or authority decision MAY be based on it. Authority over a namespace is established by the token check (§7.2), not by the Manifesto.
+A deployment that applies extensions to this specification SHOULD say so in its Manifesto and point to where they are documented. It MAY contain anything else the operator finds helpful. It MUST NOT contain credentials or anything that varies by request, and nothing in this specification depends on its content for correctness: no client MUST read it, and no security or authority decision MAY be based on it. Authority over a namespace is established by the token check (§7.2), not by the Manifesto.
 
 ---
 
@@ -659,9 +719,9 @@ It MAY contain anything else the operator finds helpful. It MUST NOT contain cre
 
 ### 12.1 Deployment model
 
-- The reference deployment is **on-premises**: an organization runs its own Registry Server, Code Repository, and audit store inside its network.
-- The organization runs its own Auth Server, or configures the reference one for its domain; either way it issues tokens per §7.2 and nothing more (§7.5).
-- Inside the organization's network, the Registry's public hostname MAY be resolved to the on-premises instance so that Executors need no special configuration. The exact address scheme (per-namespace host vs. path) is implementer's choice and MAY differ per deployment.
+- The reference deployment is **on-premises**: an organization runs its own Registry Server, Code Repository, and audit store inside its network or inside a cloud project it controls.
+- The organization runs its own Auth Server, or configures the reference one for its domain; either way it issues tokens per §7.2 and nothing more (§7.5). It MAY admit only Principals of its own organization and MAY require a token for every request, including resolution of `public` Resources (§12.3).
+- **Addressing is by namespace.** An Executor CLI holds a list of Registries and resolves each Resource from the Registry that owns its namespace, the way package managers route scopes (`doax registry add @corp https://registry.corp.example`); a namespace not routed explicitly goes to the default Registry. A Private Registry therefore needs no special hostname: it is reached under its own origin, and the token it issues is presented to it alone (§7.2, §9.2). Inside the organization's network, the public Registry's hostname MAY additionally be resolved to the on-premises instance.
 
 ### 12.2 Upstream reference
 
@@ -671,7 +731,7 @@ It MAY contain anything else the operator finds helpful. It MUST NOT contain cre
 
 ### 12.3 Isolation statement
 
-Namespace visibility is **access control**, not **physical isolation**. An organization that requires that its Resources and data never leave its network MUST deploy on-premises per §12.1. The Registry MUST NOT describe `namespace-only` visibility on a shared public instance as isolation.
+Namespace visibility is **access control**, not **physical isolation**. An organization that requires that its Resources and data never leave its network MUST deploy on-premises per §12.1. The Registry MUST NOT describe `namespace-only` visibility on a shared public instance as isolation. On a Private Registry that requires a token for every request, `public` visibility means visible to every Principal that Registry admits, not to the world; such a Registry SHOULD say so in its Manifesto (§10A).
 
 ---
 
@@ -763,8 +823,8 @@ This specification imposes no availability or latency target on the Registry Ser
 - Additional logins for the reference Auth Server beyond Google Sign-In.
 - A standardized query interface for Data Sources.
 - Automated verification tooling; v1 verification is a manual status change.
-- Executors for platforms other than Linux CLI.
-- Messenger integrations for human-in-the-loop approval; v1 defines the approval event (§6.4, §8.3) but not any specific channel.
+- Executors other than a command-line program and the Executor Resource.
+- Delivery channels for approval requests (a messenger, mail); v1 defines the approval artifact and its events (§6.4, §8.3) but not how the person is notified.
 - Marketplace features: ratings, billing, discovery ranking.
 
 ---
@@ -773,8 +833,9 @@ This specification imposes no availability or latency target on the Registry Ser
 
 The following were not settled during specification and are recorded here so the implementer makes a conscious choice rather than an accidental one.
 
-1. **Address scheme for on-premises resolution** (§12.1): per-namespace hostname vs. path under a shared hostname.
-2. **Namespace ownership transfer and dispute process.**
+1. **Namespace ownership transfer and dispute process.**
+
+*Settled since the first draft:* the address scheme for on-premises resolution is per-namespace routing in the Executor CLI (§12.1).
 
 ---
 
@@ -801,6 +862,7 @@ The following were not settled during specification and are recorded here so the
 | idempotency class | action | yes | 6.2 |
 | recovery action | action | yes | 6.3 |
 | approval gate | action | no | 6.4 |
+| out-of-band payload | action | no | 6.6 |
 
 ---
 

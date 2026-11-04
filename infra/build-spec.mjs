@@ -5,6 +5,7 @@
  * Called by build-site.sh. Build-time only — `marked` is a devDependency, never shipped anywhere.
  * The canonical spec lives in git; this is a rendered copy, so the page says so and links back.
  */
+import { execSync } from "node:child_process";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,6 +15,15 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const SRC = join(ROOT, "docs/spec/registry-v0.1.md");
 const OUT = join(ROOT, "infra/terraform/build/site");
 const GITHUB = "https://github.com/sugeul/doax/blob/main/docs/spec/registry-v0.1.md";
+// The spec changes between versions; a deployment that cites it pins the revision it implemented
+// (day1-doax: "doax 833c760"), so the page says which one it renders.
+const REVISION = (() => {
+    try {
+        return execSync("git rev-parse --short HEAD", { cwd: ROOT, encoding: "utf8" }).trim();
+    } catch {
+        return "unknown";
+    }
+})();
 
 marked.setOptions({ gfm: true });
 
@@ -68,7 +78,7 @@ const html = `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <a class="ghost" href="/playbook">Playbooks</a>
 <a class="ghost" href="/install">Install CLI</a>
 </div></header>
-<p class="note">This is a rendered copy of the specification. The canonical, versioned source lives in git: <a href="${GITHUB}" target="_blank" rel="noopener">docs/spec/registry-v0.1.md ↗</a>. Every doax component advertises this page as its <code>specification</code> URL (§10A).</p>
+<p class="note">This is a rendered copy of the specification, at revision <code>${REVISION}</code>. The canonical, versioned source lives in git: <a href="${GITHUB}" target="_blank" rel="noopener">docs/spec/registry-v0.1.md ↗</a>. Every doax component advertises this page as its <code>specification</code> URL and names the version it implements in its manifesto (§10A).</p>
 <main class="wrap">${body}</main>
 <footer><div class="wrap">doax · <a href="/">home</a> · <a href="/doax-manifesto">manifesto</a> · <a href="/playbook">playbooks</a> · <a href="/install">install</a></div></footer>
 </body></html>`;

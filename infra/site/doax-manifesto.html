@@ -142,8 +142,8 @@
     <ol class="principles">
         <li><strong>Delegation is bounded by the resource, not the agent.</strong>Every resource exposes a fixed, closed set of operations. Nothing outside that set is reachable, whatever the underlying code or MCP server offers.</li>
         <li><strong>Tiers can be strengthened, never weakened.</strong>The namespace, a dependency, the authenticator, or the resource itself at runtime can demand a stronger tier. Nothing can demand a weaker one.</li>
-        <li><strong>A tier-1 consent belongs to a human.</strong>An agent may log in again by itself for tiers 2 to 4. It may never approve a tier-1 operation on its own, because then tier 1 would mean nothing.</li>
-        <li><strong>Every execution is attested.</strong>Resolves, package fetches, reads, dry-runs, executions and logins all produce audit events. Nothing can edit or delete an event; a correction is a new event that points to the old one.</li>
+        <li><strong>A tier-1 consent belongs to a human, and so does a tier-2 approval of a write.</strong>An agent may log in again by itself for tiers 2 to 4, and may prepare everything. It may never give the interactive consent tier 1 demands, and where a tier-2 resource is served by its own provider, the per-call approval is the person's decision, made with a fresh sign-in the agent does not hold. Otherwise those tiers would mean nothing.</li>
+        <li><strong>Every execution is attested by whoever ran it.</strong>Resolves, package fetches, reads, dry-runs, executions and logins all produce audit events. The record is written by the party that did the work: the registry for its own surface, the executor host or provider for server-side work, the caller's own device for what ran there. Nothing can edit or delete an event; a correction is a new event that points to the old one.</li>
         <li><strong>Integrity before execution.</strong>A manifest carries the digest of its package, taken at publish time. A package whose digest does not match is not run.</li>
         <li><strong>Credentials stay where execution happens.</strong>Logins to target systems are cached on the machine that runs the resource. They never reach the registry, the code repository or the auth server.</li>
         <li><strong>Published is permanent.</strong>A version never changes and is never deleted, so every audit record stays reproducible.</li>
@@ -167,8 +167,9 @@
     <ul>
         <li><strong>Fixed Interface.</strong> doax reaches a resource only through the operations listed for its kind. A package can be native code or an MCP server, but its MCP tools are reachable only when the manifest maps them to these operations. Dynamic tool discovery cannot widen what a resource does.</li>
         <li><strong>Manifest.</strong> One JSON document per version. It carries the summary, description, owner, required tier, execution location, authenticator, dependencies, audit scope, a digest of the package, and a service level declaration with the expected faults.</li>
+        <li><strong>Execution location.</strong> Every data-source, action and authenticator says where it runs. <code>caller-device</code>: the caller's own machine, with the caller's credentials; its audit stays in the caller's local log. <code>trusted-executor</code>: an org-operated executor host that work is dispatched to. <code>server</code>: the publisher's own service, its <strong>provider</strong>, invoked directly; the provider enforces the tier and approvals itself and writes the central audit.</li>
         <li><strong>Immutability.</strong> A published version never changes and is never deleted. It can be marked <em>deprecated</em> (still resolvable, with a warning) or <em>yanked</em> (hidden from search and "latest", still resolvable by exact version).</li>
-        <li><strong>Namespaces.</strong> Self-serve: sign in with email and claim one. The owner governs it. <code>@global</code> is open to anyone signed in; <code>@doax</code> holds the official adapters.</li>
+        <li><strong>Namespaces.</strong> On the hosted registry they are self-serve: sign in and claim one, and the owner governs it. <code>@global</code> is open to anyone signed in; <code>@doax</code> holds the official adapters. A private registry sets its own rules: an operator creates namespaces, and there need be no <code>@global</code>.</li>
         <li><strong>Visibility and verification.</strong> Visibility (<code>public</code>, <code>namespace-only</code>, <code>grant-list</code>) says who can see a resource. Verification (<code>unverified</code>, <code>under-review</code>, <code>verified</code>, <code>rejected</code>) says whether a reviewer vouched for it. One is never shown as a stand-in for the other.</li>
     </ul>
 
@@ -177,7 +178,7 @@
     <div class="table-scroll"><table>
         <tr><th>tier</th><th>name</th><th>when the operation is invoked</th></tr>
         <tr><td>1</td><td>Interactive</td><td>The person logs in or consents interactively, every time.</td></tr>
-        <tr><td>2</td><td>Long-lived token, per-call check</td><td>A valid token proves identity; authorization is checked for this specific call.</td></tr>
+        <tr><td>2</td><td>Long-lived token, per-call check</td><td>A valid token proves identity; authorization is checked for this specific call. On the caller's device the doax interface asks the caller. A provider asks the person for a signed, single-use approval bound to the exact request.</td></tr>
         <tr><td>3</td><td>Long-lived token, no per-call check</td><td>A valid token is enough; the audit record is the only control.</td></tr>
         <tr><td>4</td><td>Unauthenticated</td><td>No login needed; the call is still audited, with an anonymous actor.</td></tr>
     </table></div>
@@ -189,7 +190,7 @@
     </p>
     <h3>Two logins, never confused</h3>
     <ul>
-        <li><strong>Registry authentication</strong> (caller to doax) yields a signed token that anyone can check offline. It carries who you are and which namespaces you may access, never per-resource permissions. The live registry signs people in with an emailed code, and <code>doax login --web</code> takes a token from the browser.</li>
+        <li><strong>Registry authentication</strong> (caller to doax) yields a signed token that anyone can check offline. It carries who you are, which namespaces you may access, and the audience it is for (the registry, or one provider), never per-resource permissions. The hosted registry signs people in with an emailed code; a private registry uses the organization's own identity provider, such as Google Workspace. Either way <code>doax login --web</code> takes the token from the browser, and <code>doax registry add @org &lt;url&gt;</code> routes a namespace to the registry that owns it.</li>
         <li><strong>Target authentication</strong> (caller to Slack, Google, Microsoft, and so on) is done by an <strong>authenticator</strong> resource such as <code>@doax/slack-login</code>. The credential is cached once per caller and authenticator, and every resource that names the same authenticator reuses it, so you log in to a system once.</li>
     </ul>
     <p>Each authenticator declares a <strong>subject</strong>: <code>personal</code> (the calling human's credentials), <code>organization</code> (a service account) or <code>machine</code> (a registered executor). Its manifest describes the whole flow, the scopes it requests and how to revoke it, so a reviewer can judge it before anyone uses it.</p>
@@ -206,10 +207,18 @@
         record how fresh the source data was. Credential values are never logged.
     </p>
     <p>
+        Who writes the record depends on where the work ran. The registry writes its own surface: sign-ins,
+        resolves, publishes, approvals, audit queries. Work that runs server-side, on an executor host or at a
+        provider, is written to the central log by that host or provider, under a resource token or the provider's
+        own service identity, and names the caller it answered. Work that runs on the caller's own device stays in
+        the caller's local log (<code>~/.doax/audit.jsonl</code>) and is never uploaded: a report from the device
+        being audited proves nothing a central log should rely on. A server-side writer that cannot deliver buffers
+        locally and never discards an event.
+    </p>
+    <p>
         Integrity is checked before anything runs: the manifest carries a digest of the package taken at publish
-        time, and a package whose digest does not match is refused. Each namespace chooses where its audit events
-        go; if an executor cannot deliver them, it buffers them locally and never discards them. Namespace owners
-        query their events with <code>doax audit</code>.
+        time, and a package whose digest does not match is refused. Namespace owners query their events with
+        <code>doax audit</code>.
     </p>
 
     <h2 id="architecture">Architecture</h2>
@@ -241,7 +250,7 @@
             <text x="64" y="208" font-weight="600" fill="#eaf1fb">doax interface (the adapter)</text>
             <text x="64" y="224" font-size="11.5" fill="#eaf1fb">resolves, checks digest, applies tier</text>
             <text x="64" y="240" font-size="11.5" fill="#eaf1fb">runs the package, holds credentials</text>
-            <text x="64" y="256" font-size="11.5" fill="#eaf1fb">writes an audit event for every call</text>
+            <text x="64" y="256" font-size="11.5" fill="#eaf1fb">keeps a local audit log of every call</text>
             <rect x="456" y="96" width="264" height="56" rx="8" fill="none" stroke="#2a3a56" stroke-width="1.25"/>
             <text x="472" y="120" font-weight="600" fill="#eaf1fb">Registry Server</text>
             <text x="472" y="136" font-size="11.5" fill="#91a4c2">manifests, search, resolve, audit log</text>
@@ -260,21 +269,26 @@
     <p>
         The services never run a resource and never see a target credential. The doax interface inside the
         executor does the work: it resolves a resource, fetches its package, checks the digest, works out the
-        effective tier, gets credentials through the authenticator, runs the package, and writes the audit event.
+        effective tier, gets credentials through the authenticator, runs the package, and keeps the local audit
+        record. A <code>server</code> resource has its provider do the same on the other side: verify the token,
+        apply the tier, demand the approval, write the central audit event.
     </p>
     <div class="table-scroll"><table>
         <tr><th>component</th><th>role</th></tr>
         <tr><td>Executor</td><td>Any program acting for a person. The <a href="https://demo.app.doax.io" rel="noopener">live demo</a> dashboard is one: a web page that resolves, checks digests and reads resources in the browser.</td></tr>
         <tr><td>doax interface</td><td>The adapter with auditing. The only part that touches target credentials; an executor cannot skip its checks.</td></tr>
-        <tr><td>Registry Server</td><td>Manifests, search, resolution, namespaces, audit storage and query.</td></tr>
+        <tr><td>Registry Server</td><td>Manifests, search, resolution, namespaces, approvals, audit storage and query.</td></tr>
         <tr><td>Code Repository</td><td>Immutable package storage.</td></tr>
-        <tr><td>Auth Server</td><td>Sign-in and offline-verifiable tokens.</td></tr>
+        <tr><td>Auth Server</td><td>Sign-in and offline-verifiable tokens, scoped to the registry or to one provider.</td></tr>
+        <tr><td>Provider</td><td>The service behind a <code>server</code> resource, run by its namespace's owner. It enforces the tier and approvals itself and writes the central audit of its namespace's resources under its own service identity. The first one in production fronts an organization's finance system on that organization's private registry.</td></tr>
         <tr><td>Executor host</td><td>An org-operated machine for <code>trusted-executor</code> work that must run inside a company's network. Scaffold only.</td></tr>
     </table></div>
     <p>
         The registry is plain HTTPS and JSON, like npm. On doax.io the three services run as one Lambda behind
         CloudFront and API Gateway, with Aurora PostgreSQL and S3. The on-premise build, <code>doax-server</code>,
-        runs the same three in one process with SQLite and local files.
+        runs the same three in one process with SQLite and local files. A private registry can also be the
+        organization's own build on its own cloud: the first one runs on Google Cloud with Cloud Run and Cloud SQL,
+        and the stock <code>doax</code> CLI works against it unchanged.
     </p>
 
     <h2 id="cli">The developer CLI</h2>
@@ -289,6 +303,7 @@
 <span class="p">$</span> doax execute @doax/slack-post --param channel=C0123456789 \
       --param text="hello from doax" --dry-run         <span class="c"># preview, no side effects</span>
 <span class="p">$</span> doax login --email you@example.com                  <span class="c"># 6-digit code by email (or --web)</span>
+<span class="p">$</span> doax registry add @corp https://registry.corp.example   <span class="c"># route a namespace to a private registry</span>
 <span class="p">$</span> doax audit --resource @doax/slack-post              <span class="c"># see what was done</span></pre>
     <div class="table-scroll"><table>
         <tr><th>command</th><th>what it does</th></tr>
@@ -302,7 +317,7 @@
         <tr><td><code>registry add | list | remove</code></td><td>Route a namespace to a different registry, like npm scopes</td></tr>
         <tr><td><code>app deploy</code></td><td>Host a static app at <code>https://&lt;ns&gt;.app.doax.io</code> behind doax sign-in</td></tr>
     </table></div>
-    <p>For scripts and CI, every command runs without prompts: <code>--json</code> gives one JSON object with a <code>faultClass</code> and a fix on errors, <code>--no-input</code> disables prompts, <code>--secret</code> supplies a credential inline, and <code>--yes</code> grants a tier-2 per-call check.</p>
+    <p>For scripts and CI, every command runs without prompts: <code>--json</code> gives one JSON object with a <code>faultClass</code> and a fix on errors, <code>--no-input</code> disables prompts, <code>--secret</code> supplies a credential inline, and <code>--yes</code> answers the tier-2 confirmation the CLI itself asks. It cannot stand in for an approval a provider demands.</p>
 
     <h2 id="publishing">Publishing a resource</h2>
     <p>A resource is two files: a JSON manifest and a package.</p>
@@ -343,19 +358,18 @@
     <p>The Google and OneDrive authenticators take a refresh token, minted once by consenting at <code>auth.doax.io</code>. All Google scopes are read-only. <a href="/">Search the live catalog</a> to see each resource's tier and verification status.</p>
 
     <h2 id="deployment">Deployment and status</h2>
-    <p>doax runs as hosted SaaS first, with on-premise for organizations that need physical isolation. Both use the same code.</p>
+    <p>doax runs as hosted SaaS first. An organization that needs its own registry runs one itself, on its own cloud or on-premise. All three follow the same spec, and the same CLI talks to all of them.</p>
     <div class="table-scroll"><table>
-        <tr><th></th><th>hosted (doax.io)</th><th>on-premise (doax-server)</th></tr>
-        <tr><td>For</td><td>Anyone; each org gets its own <code>@org</code> namespace</td><td>Orgs whose data or credentials must never leave their network</td></tr>
-        <tr><td>Runs on</td><td>AWS: Lambda, API Gateway, Aurora PostgreSQL, S3, CloudFront</td><td>One process: Docker image or <code>npx doax-server</code>, SQLite and local files</td></tr>
-        <tr><td>Isolation</td><td>Access control only; manifests live on doax infrastructure</td><td>Physical; optional link to an upstream registry, off by default</td></tr>
-        <tr><td>Status</td><td class="live">Live</td><td>Builds and passes tests; not yet run end to end</td></tr>
+        <tr><th></th><th>hosted (doax.io)</th><th>private registry</th><th>on-premise (doax-server)</th></tr>
+        <tr><td>For</td><td>Anyone; each org gets its own <code>@org</code> namespace</td><td>An organization that runs the registry for its own people and its own systems</td><td>Orgs whose data or credentials must never leave their network</td></tr>
+        <tr><td>Runs on</td><td>AWS: Lambda, API Gateway, Aurora PostgreSQL, S3, CloudFront</td><td>The organization's platform. The first runs on Google Cloud: Cloud Run, Cloud SQL, Cloud Storage</td><td>One process: Docker image or <code>npx doax-server</code>, SQLite and local files</td></tr>
+        <tr><td>Isolation</td><td>Access control only; manifests live on doax infrastructure</td><td>Inside the organization's own project; sign-in limited to its identity provider; every request needs a token, so <code>public</code> means every signed-in member</td><td>Physical; optional link to an upstream registry, off by default</td></tr>
+        <tr><td>Status</td><td class="live">Live</td><td class="live">Live, first tenant in production</td><td>Builds and passes tests; not yet run end to end</td></tr>
     </table></div>
-    <p>Private <code>@org</code> resources on SaaS are access-controlled, not isolated. A resource that has to reach a company's internal network needs a trusted executor inside that network.</p>
+    <p>Private <code>@org</code> resources on SaaS are access-controlled, not isolated. A resource that has to reach a company's internal network needs a trusted executor inside that network, or a <code>server</code> resource whose provider runs there.</p>
     <h3>Not built yet</h3>
     <ul>
-        <li>Hosted executors and <code>trusted-executor</code> dispatch. Today every resource runs where its caller runs.</li>
-        <li>OIDC and Google sign-in. Email-code login is used instead, with the same token contract.</li>
+        <li>Hosted executors and <code>trusted-executor</code> dispatch. Today a resource runs on the caller's device or, as a <code>server</code> resource, at its own provider.</li>
         <li>Verification review. Resources show a verification status, but nobody reviews them yet.</li>
         <li>Access control for doax-app. Any signed-in user can view any deployed app.</li>
     </ul>
@@ -367,7 +381,7 @@
     </p>
     <pre><span class="c"># the same manifesto, for machines</span>
 <span class="p">$</span> curl https://registry.doax.io/manifesto.json</pre>
-    <p class="note">This page is the human-readable form. <a href="https://registry.doax.io/manifesto.json" rel="noopener">manifesto.json</a> is the machine-readable one.</p>
+    <p class="note">This page is the human-readable form. <a href="https://registry.doax.io/manifesto.json" rel="noopener">manifesto.json</a> is the machine-readable one. A private registry serves its own, naming its operator, the version of the <a href="/spec">spec</a> it implements, any extensions it applies, and how to sign in to it.</p>
 
     <footer>
         <a href="/">doax.io</a>

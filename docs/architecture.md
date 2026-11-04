@@ -155,7 +155,7 @@ With those two steps, a company's people authenticate as themselves into `@org`,
 
 ## 10. Spec deltas from v0.1
 
-The product requires these additions beyond spec v0.1. Neither is a new resource kind: §10.1 is a configuration extension, §10.2 an interface between the Executor CLI and an Auth Server.
+The product required these additions beyond the first draft of spec v0.1. Neither is a new resource kind: §10.1 is a configuration extension, §10.2 an interface between the Executor CLI and an Auth Server. **Both have since been folded into the spec itself** (per-namespace trusted issuers in spec §7.2 and §10; `doax login --web` in spec §7.7), together with what the first private registry (day1-doax) needed: Providers and provider-written audit (spec §2, §6.5, §8.2a), the approval artifact (§6.4), audience-scoped tokens and exchange (§7.2), Applications as callers (§4.6), out-of-band payloads (§6.6), and per-namespace registry routing (§12.1). The text below is kept as the design rationale; the spec is normative where they differ.
 
 ### 10.1 Per-namespace trusted-issuer registration (extends spec §10, §7.2)
 
