@@ -53,7 +53,6 @@
     box-shadow: 0 0 18px var(--glow); mask: radial-gradient(circle 11px at 50% 50%, transparent 56%, #000 58%);
     -webkit-mask: radial-gradient(circle 11px at 50% 50%, transparent 56%, #000 58%);
   }
-  .brand small { font-family: var(--mono); font-size: 11px; color: var(--muted); font-weight: 500; letter-spacing: .05em; }
   .tabs { display: flex; gap: 4px; margin-left: 6px; }
   .tab {
     font: inherit; font-size: 14px; color: var(--muted); background: none; border: 0; cursor: pointer;
@@ -75,7 +74,6 @@
   }
   .cta:hover { filter: brightness(1.07); }
   @media (max-width: 760px){ .tab span, .nav-right .ghost { display: none; } }
-  @media (max-width: 1180px){ .brand small { display: none; } }
 
   /* ---------- scrollytelling scene ---------- */
   #scene { position: relative; height: 680vh; }
@@ -198,7 +196,7 @@
 <div class="progress" id="progress"></div>
 <header class="nav">
   <div class="wrap nav-in">
-    <a class="brand" href="#" id="brandHome"><span class="ring" aria-hidden="true"></span> doax <small>Delegation of Object Access and eXecution</small></a>
+    <a class="brand" href="#" id="brandHome"><span class="ring" aria-hidden="true"></span> doax</a>
     <nav class="tabs" role="tablist" aria-label="Primary">
       <button class="tab" role="tab" id="tab-home" aria-selected="true" aria-controls="view-home"><span class="k" aria-hidden="true"></span>Home</button>
       <button class="tab" role="tab" id="tab-search" aria-selected="false" aria-controls="view-search">Search<span>&nbsp;the registry</span></button>
