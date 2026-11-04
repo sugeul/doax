@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -103,6 +103,24 @@ describe("doax cli", () => {
         const result = await run(["login", "--web", "--token", "x", "--registry", "https://registry.test"], deps(fetchImpl));
         expect(result.exitCode).toBe(2);
         expect(result.stderr).toContain("cannot be combined");
+    });
+
+    it("issues a resource token at the resource's tokens path with the login token", async () => {
+        const home = mkdtempSync(join(tmpdir(), "doax-rt-"));
+        try {
+            writeFileSync(join(home, "config.json"), JSON.stringify({ tokens: { "https://registry.test": "doax_pat_t" } }));
+            const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+                expect(String(input)).toBe("https://registry.test/@corp/orders/tokens");
+                expect(init?.method).toBe("POST");
+                expect((init?.headers as Record<string, string>).authorization).toBe("Bearer doax_pat_t");
+                return Response.json({ resource: "@corp/orders", tokenId: "0123456789abcdef", token: "doax_rt_x" }, { status: 201 });
+            }) as typeof fetch;
+            const result = await run(["resource-token", "issue", "@corp/orders"], { config: { registry: "https://registry.test" }, fetch: fetchImpl, home });
+            expect(result.exitCode).toBe(0);
+            expect(result.stdout).toContain("doax_rt_x");
+        } finally {
+            rmSync(home, { recursive: true, force: true });
+        }
     });
 
     it("opens the browser without a shell, so & in the login URL survives on Windows", () => {

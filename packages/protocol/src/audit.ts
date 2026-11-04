@@ -26,7 +26,9 @@ export const ANONYMOUS_ACTOR = "anonymous";
 
 export type AuditExecutionLocation =
     | { kind: "caller-device"; deviceId: string }
-    | { kind: "executor"; executor: string };
+    | { kind: "executor"; executor: string }
+    /** Events the Registry Server writes about its own surface (sign-in, publish, resolve). */
+    | { kind: "registry"; registry: string };
 
 /** Mandatory event fields (spec §8.4). Events are append-only once written (spec §8.1). */
 export interface AuditEvent {

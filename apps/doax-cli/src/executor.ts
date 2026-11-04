@@ -168,11 +168,7 @@ export async function loadPackage(deps: ExecutorDeps, resolved: ResolvedResource
         }
         mkdirSync(cacheDir, { recursive: true });
         writeFileSync(cached, content);
-        await audit(
-            deps,
-            [baseEvent(deps, "fetch", resolved.identity, { tier: 4, strengthenedBy: [] }, { status: "success", reasonCode: "ok" })],
-            resolved.origin,
-        );
+        audit(deps, [baseEvent(deps, "fetch", resolved.identity, { tier: 4, strengthenedBy: [] }, { status: "success", reasonCode: "ok" })]);
     }
     return (await import(pathToFileURL(cached).href)) as Record<string, unknown>;
 }
@@ -191,7 +187,8 @@ export async function invokeOperation(
     const exportName = operation === "dry-run" ? "dryRun" : operation;
     const fn = module[exportName];
     if (typeof fn !== "function") throw new ExecutorError(`package for ${resolved.identity} does not export ${exportName}()`, "broken-package");
-    return await (fn as (i: unknown, c: unknown) => Promise<unknown>)(input, context);
+    // `caller` lets the Resource record which device it answered (spec §8.2a).
+    return await (fn as (i: unknown, c: unknown) => Promise<unknown>)(input, { ...context, caller: { deviceId: hostname() } });
 }
 
 /* ---------- credentials (spec §7.6: keyed by caller and Authenticator, never by resource) ---------- */
@@ -254,9 +251,15 @@ export async function confirmTier(deps: ExecutorDeps, effective: EffectiveTier, 
     if (answer !== "y" && answer !== "yes") throw new ExecutorError("authorization declined by the caller", "authorization-declined");
 }
 
-/* ---------- audit (spec §8.3, §9.1 step 9: deliver, buffer on failure, never discard) ---------- */
+/*
+ * ---------- audit (spec §8.3): local-only ----------
+ * What runs on the caller's device is recorded on the device, append-only, and never sent:
+ * the registry's own audit covers only what the registry itself sees (sign-in, resolve, publish).
+ */
 
-const bufferPath = (deps: ExecutorDeps) => join(deps.home, "audit-buffer.jsonl");
+const logPath = (deps: ExecutorDeps) => join(deps.home, "audit.jsonl");
+/** Undelivered events from when the CLI posted audit to the registry; folded into the local log. */
+const legacyBufferPath = (deps: ExecutorDeps) => join(deps.home, "audit-buffer.jsonl");
 
 export function baseEvent(
     deps: ExecutorDeps,
@@ -279,32 +282,13 @@ export function baseEvent(
     };
 }
 
-export async function audit(deps: ExecutorDeps, events: AuditEvent[], origin?: string): Promise<void> {
-    const destination = origin ?? readRegistryMap(deps).default;
-    const pending: AuditEvent[] = [];
-    try {
-        const buffered = readFileSync(bufferPath(deps), "utf8")
-            .split("\n")
-            .filter(Boolean)
-            .map((line) => JSON.parse(line) as AuditEvent);
-        pending.push(...buffered);
-    } catch {
-        /* no buffer */
+export function audit(deps: ExecutorDeps, events: AuditEvent[]): void {
+    mkdirSync(deps.home, { recursive: true });
+    if (existsSync(legacyBufferPath(deps))) {
+        appendFileSync(logPath(deps), readFileSync(legacyBufferPath(deps), "utf8"));
+        rmSync(legacyBufferPath(deps), { force: true });
     }
-    pending.push(...events);
-    try {
-        const res = await deps.fetch(`${destination}/audit`, {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ events: pending }),
-        });
-        if (!res.ok) throw new Error(`audit ingest HTTP ${res.status}`);
-        rmSync(bufferPath(deps), { force: true });
-    } catch {
-        mkdirSync(deps.home, { recursive: true });
-        writeFileSync(bufferPath(deps), "");
-        for (const event of pending) appendFileSync(bufferPath(deps), `${JSON.stringify(event)}\n`);
-    }
+    for (const event of events) appendFileSync(logPath(deps), `${JSON.stringify(event)}\n`);
 }
 
 export { fault };
