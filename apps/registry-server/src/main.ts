@@ -9,6 +9,7 @@ const { app } = createRegistryApp({
     operator: config.operator,
     databasePath: join(config.dataDir, "registry.sqlite"),
     upstream: config.upstream,
+    adminToken: process.env.DOAX_ADMIN_TOKEN ?? null,
 });
 
 serve({ fetch: app.fetch, port: config.port }, (info) => {

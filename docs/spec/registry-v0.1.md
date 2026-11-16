@@ -38,6 +38,7 @@ The Registry is modeled on package registries (npm, Docker Hub, GitHub) rather t
 | **Manifesto** | A static, plain-language JSON file at `{domain}/manifesto.json` that tells a newcomer what this system is and who is responding. Referenced by every response (§10A). Not to be confused with a Resource's Manifest. |
 | **Package** | A Manifest plus the code that implements the Resource, stored as one immutable version. |
 | **Namespace** | An ownership and visibility scope for Resources, written `@name`. |
+| **Namespace role** | A Principal's authority within a namespace: `owner` (full control, including namespace policy and member management), `publisher` (publish and manage versions), or `reader` (read and use its Resources). A **member** is a Principal holding any of these roles; where this document says "members" (§8.5) it means every role, not the `reader` role alone. |
 | **Registry Server** | The service that stores Manifests, resolves Resources, enforces namespace visibility, and ingests audit events. |
 | **Code Repository** | The service that stores Packages by immutable version. |
 | **Auth Server** | Whatever issues Registry tokens (§7.2) for a given Registry. The public Registry's Auth Server uses Google Sign-In; a Private Registry MAY run any Auth Server that issues conforming tokens. |
