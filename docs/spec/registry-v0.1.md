@@ -420,7 +420,7 @@ A Data Source or Action declared `trusted-executor` MUST include an **executor r
 
 ### 6A.6 Tier and audit
 
-- The effective Tier of a dispatched operation is the strongest of the target Resource's effective Tier (§7.4) and the Executor Resource's own required Tier. The Executor Resource's Tier is the control over **who may use the machine**; the target's Tier is the control over **who may do the work**. Namespace policy SHOULD set the Executor Resource Tier floor at Tier 2 so that every dispatch carries a per-call authorization check.
+- The effective Tier of a dispatched operation is the strongest of the target Resource's effective Tier (§7.4) and the Executor Resource's own required Tier. The Executor Resource's Tier is the control over **who may use the machine**; the target's Tier is the control over **who may do the work**. Namespace policy SHOULD set the Executor Resource Tier floor at Tier 2 so that every dispatch carries a per-call authorization check, subject to any standing-authorization window the namespace policy declares (§7.4a).
 - The audit actor for a dispatched operation is the dispatching Principal, never the machine. The machine appears in *execution location*.
 - Every event emitted by an Executor Resource MUST include *executor cpu time* (§8.4), so that machine consumption is attributable to a Principal and a Resource and queue pressure is visible in audit queries.
 
@@ -476,8 +476,8 @@ Tiers are ordered from strongest (Tier 1) to weakest (Tier 4).
 
 | Tier | Name | Behavior at invocation time |
 |---|---|---|
-| 1 | Interactive authentication | The caller MUST authenticate interactively (a login or consent prompt is shown) at every invocation. |
-| 2 | Long-lived authentication, per-call authorization check | A valid long-lived token suffices for identity; authorization for this specific invocation MUST be confirmed before proceeding. For a `caller-device` Resource the Executor CLI asks the caller (§9.1); for a `server` Resource the Provider requires an approval (§6.4) that the Executor cannot produce on its own. |
+| 1 | Interactive authentication | The caller MUST authenticate interactively (a login or consent prompt is shown) at every invocation. A standing authorization never applies: no window, flag, or configuration lets one invocation's authentication stand for the next. |
+| 2 | Long-lived authentication, per-call authorization check | A valid long-lived token suffices for identity; authorization for an invocation MUST be confirmed before proceeding, unless a prior authorization for the same Resource is still within the standing-authorization window the namespace policy sets (§7.4a), in which case the Executor MAY proceed without re-confirming. The window is scoped to a single Resource and never crosses Resources or namespaces. For a `caller-device` Resource the Executor CLI asks the caller (§9.1); for a `server` Resource the Provider requires an approval (§6.4) that the Executor cannot produce on its own. |
 | 3 | Long-lived authentication, no per-call check | A valid long-lived token suffices; no further check is made. The audit record is the only control. |
 | 4 | Unauthenticated execution | No Principal is required. The Executor MUST still record an audit event with an anonymous actor marker. |
 
@@ -499,6 +499,17 @@ effective_tier = strongest of (
 - A Resource MUST be able to demand a stronger Tier than it declared, at runtime, based on what it observes (for example, an order above a threshold). This is a **step-up**. The Executor MUST honor a step-up.
 - No component — not the Executor, not a dependent Resource, not the namespace, not the caller — MAY weaken a Resource's declared Tier.
 - The effective Tier and the reason for any strengthening MUST be recorded in the audit event (§8.4).
+
+### 7.4a Tier 2 standing-authorization window
+
+A namespace policy MAY declare a **standing-authorization window** for its Tier 2 Resources: a duration — from seconds up to a few hours — during which a caller's confirmed authorization for one Resource stands for further invocations of that same Resource without re-confirming. It exists so that a burst of Tier 2 work does not demand a fresh confirmation on every call, without lowering the identity the Tier requires.
+
+- The window applies to **Tier 2 only**. Tier 1 is always per-call; a standing authorization never applies to it (§7.3), and no window, flag, or configuration changes that.
+- The window is **scoped to a single Resource** (`@namespace/name`, independent of version). An authorization for one Resource never authorizes another, and never crosses namespaces.
+- **Absent a declared window, the per-call check stands on every invocation** — the strict behavior is the default.
+- The window is authorization the namespace already granted, reused within its own bound; it does **not** weaken the Resource's Tier (§9.2) and never admits a credential weaker than the Tier requires. Identity is still proven by a valid long-lived token on every call.
+- A namespace policy MAY set the window to zero to forbid standing authorizations. Nothing outside the namespace policy MAY lengthen it, and the caller MAY always choose to re-confirm sooner.
+- For a `server` Resource, a standing authorization never stands in for the Provider's approval (§6.4, §6.5); the window governs only the Executor's own per-call confirmation.
 
 ### 7.5 Namespace access confirmation
 
@@ -644,7 +655,7 @@ The Executor MUST:
 3. Fetch the Package and verify its integrity digest against the Manifest before running anything.
 4. Compute the effective Tier (§7.4) and run the matching authorization flow:
    - Tier 1: open an interactive authentication surface (browser-based login or consent) and wait for completion.
-   - Tier 2: present the token, request per-call authorization confirmation from the caller, proceed only on confirmation. For a `server` Resource this confirmation does not stand in for the Provider's approval (§6.4, §6.5).
+   - Tier 2: present the token, request per-call authorization confirmation from the caller, and proceed only on confirmation — or, when a prior authorization for the same Resource is still within the namespace's Tier 2 standing-authorization window (§7.4a), proceed on that standing authorization. For a `server` Resource this confirmation does not stand in for the Provider's approval (§6.4, §6.5).
    - Tier 3: present the token, proceed.
    - Tier 4: proceed, mark actor as anonymous.
 5. Resolve the Resource's referenced Authenticator; if no cached credential exists for this caller and Authenticator (or the Tier requires it), call its `authenticate` in the appropriate mode, provide the interaction surface it requests, and cache the resulting material. Hand the material to the Resource's operations.
@@ -678,7 +689,7 @@ The Registry Server MUST provide the following capabilities over HTTPS with JSON
 | Executor matching | Given a `trusted-executor` Resource, return the Executor Resources visible to the caller whose `capabilities` satisfy its executor requirements (§6A.5), with current load. |
 | Publish | Accept a Package for a new version under a namespace the caller owns. Rejects duplicate versions. Emits `publish`. |
 | Deprecate / Yank | Lifecycle transitions per §4.4. |
-| Namespace management | Create namespace, set visibility defaults, set Tier floor, set audit destination, set Upstream reference policy, manage grant lists, register trusted issuers (§7.2) and Providers (§8.2a) for the namespace. |
+| Namespace management | Create namespace, set visibility defaults, set Tier floor, set the Tier 2 standing-authorization window (§7.4a), set audit destination, set Upstream reference policy, manage grant lists, register trusted issuers (§7.2) and Providers (§8.2a) for the namespace. |
 | Verification | Operator or delegated reviewer sets verification status. |
 | Login discovery | Declare, without a token, the login methods the Auth Server offers and where its web login page is (§7.7). |
 | Verification material | Publish, without a token, the public material needed to verify its tokens offline (§7.2). |
@@ -897,7 +908,7 @@ The following were not settled during specification and are recorded here so the
 - The source returns company-wide rows to the CEO and team-scoped rows to a team lead; the Registry does not know or care which.
 
 **B.4 Private Executor Resource: batch machine**
-- kind `executor`, required tier 2 (every dispatch needs a per-call authorization check).
+- kind `executor`, required tier 2 (every dispatch needs a per-call authorization check, subject to any standing-authorization window the namespace sets, §7.4a).
 - `capabilities`: network reach "internal ERP, internal file share"; credential kinds held "ERP export service account", "file share service account"; concurrency limit 4; scheduling support "daily and hourly"; resource constraints "namespace @corp only".
 - Authenticator: `@corp/batch-01-identity@1.x`, subject `machine`, interaction kind `none`; identity established at registration by an operator and renewed every 24 hours; Registry verifies it on each `dispatch`; revoked by the operator through namespace management.
 - Service level: unavailability counted as every instant `capabilities` cannot be answered; dispatch queue latency "starts within 5 minutes of request at p95"; expected faults: `unreachable`, `at-capacity` (recommended action: retry after a delay), `machine-identity-expired` (escalate to operator), `credential-missing` (escalate to operator).

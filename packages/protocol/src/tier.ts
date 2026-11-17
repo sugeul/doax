@@ -1,6 +1,7 @@
 /**
   * Authentication tiers (spec §7.3). Lower number is stronger:
-  * 1 interactive, 2 long-lived + per-call check, 3 long-lived, 4 unauthenticated.
+  * 1 interactive (always per-call), 2 long-lived + per-call check (reusable within a namespace
+  * standing-authorization window, §7.4a), 3 long-lived, 4 unauthenticated.
   */
 export type Tier = 1 | 2 | 3 | 4;
 

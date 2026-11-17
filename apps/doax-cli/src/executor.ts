@@ -38,6 +38,12 @@ export interface ResolvedResource {
     warning?: string;
     /** Registry origin that resolved this resource; packages and audit go back to it. */
     origin: string;
+    /**
+     * Tier 2 standing-authorization window in seconds, set by the owning namespace's policy (spec §7.4a).
+     * A confirmed authorization for this Resource stands for this long before the per-call check returns.
+     * 0 or absent means strict per-call: every invocation is re-confirmed.
+     */
+    standingAuthWindowSeconds?: number;
 }
 
 /* ---------- the client's registry list: namespaces route to registries (npm-scope style) ---------- */
@@ -238,17 +244,66 @@ export function effectiveTierFor(resolved: ResolvedResource, authenticatorTier: 
     return computeEffectiveTier(resolved.manifest.requiredTier ?? 4, others);
 }
 
-/** Tier 2 demands per-call authorization confirmation; tier 1 additionally forces interactive auth. */
-export async function confirmTier(deps: ExecutorDeps, effective: EffectiveTier, assumeYes: boolean, what: string): Promise<void> {
-    if (effective.tier > 2 || assumeYes) return;
-    if (!deps.prompt) {
-        throw new ExecutorError(`tier ${effective.tier} requires per-call confirmation: re-run with --yes`, "authorization-required", {
-            willRequireInteraction: false,
-            fix: "re-run the same command with --yes to record the caller's authorization",
-        });
+/* ---------- Tier 2 standing authorizations (spec §7.4a) ----------
+   A confirmed Tier 2 authorization is remembered, scoped to one Resource (versionless `@ns/name`), for the
+   window the namespace policy declares. Tier 1 never persists — it is always per-call. This stores no secret;
+   credential material stays in credentials.json. */
+
+interface GrantEntry {
+    resource: string;
+    grantedAt: string;
+    expiresAt: string;
+}
+
+const grantsPath = (deps: ExecutorDeps) => join(deps.home, "grants.json");
+
+function readGrants(deps: ExecutorDeps): Record<string, GrantEntry> {
+    try {
+        return JSON.parse(readFileSync(grantsPath(deps), "utf8")) as Record<string, GrantEntry>;
+    } catch {
+        return {};
     }
-    const answer = (await deps.prompt(`Tier ${effective.tier}: authorize ${what}? [y/N] `)).trim().toLowerCase();
-    if (answer !== "y" && answer !== "yes") throw new ExecutorError("authorization declined by the caller", "authorization-declined");
+}
+
+/** True while a prior Tier 2 authorization for this Resource is still within its window. */
+function activeGrant(deps: ExecutorDeps, resourceKey: string): boolean {
+    const grant = readGrants(deps)[resourceKey];
+    return grant ? Date.parse(grant.expiresAt) > Date.now() : false;
+}
+
+/** Remember a fresh authorization for the window namespace policy allows; no window declared means nothing persists. */
+function recordGrant(deps: ExecutorDeps, resourceKey: string, windowSeconds: number): void {
+    if (!(windowSeconds > 0)) return;
+    const now = new Date();
+    const all = readGrants(deps);
+    all[resourceKey] = { resource: resourceKey, grantedAt: now.toISOString(), expiresAt: new Date(now.getTime() + windowSeconds * 1000).toISOString() };
+    mkdirSync(deps.home, { recursive: true });
+    writeFileSync(grantsPath(deps), JSON.stringify(all, null, 2));
+    chmodSync(grantsPath(deps), 0o600);
+}
+
+/**
+ * Tier 2 demands per-call authorization; a prior authorization for the same Resource may stand for the window
+ * namespace policy sets (spec §7.4a), scoped to that one Resource. Tier 1 is always per-call — a standing
+ * authorization never applies to it. Tier 3/4 need no check.
+ */
+export async function confirmTier(deps: ExecutorDeps, resolved: ResolvedResource, effective: EffectiveTier, assumeYes: boolean, what: string): Promise<void> {
+    if (effective.tier > 2) return;
+    const resourceKey = credentialKey(resolved.identity);
+    // Tier 2 only: a standing authorization within the namespace-policy window skips the re-check.
+    if (effective.tier === 2 && activeGrant(deps, resourceKey)) return;
+    if (!assumeYes) {
+        if (!deps.prompt) {
+            throw new ExecutorError(`tier ${effective.tier} requires per-call confirmation: re-run with --yes`, "authorization-required", {
+                willRequireInteraction: false,
+                fix: "re-run the same command with --yes to record the caller's authorization",
+            });
+        }
+        const answer = (await deps.prompt(`Tier ${effective.tier}: authorize ${what}? [y/N] `)).trim().toLowerCase();
+        if (answer !== "y" && answer !== "yes") throw new ExecutorError("authorization declined by the caller", "authorization-declined");
+    }
+    // Tier 2 only: remember this authorization for the namespace-policy window; Tier 1 never persists.
+    if (effective.tier === 2) recordGrant(deps, resourceKey, resolved.standingAuthWindowSeconds ?? 0);
 }
 
 /*

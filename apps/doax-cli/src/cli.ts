@@ -803,7 +803,7 @@ async function readCmd(deps: CliDeps, refInput: string | undefined, values: Reco
     if (resolved.kind !== "data-source") return { exitCode: 1, stderr: `doax read: ${resolved.identity} is a ${resolved.kind}, not a data-source` };
 
     const { credential, authenticator, effective } = await credentialFor(xdeps, resolved, values.secret as string | undefined);
-    await confirmTier(xdeps, effective, Boolean(values.yes), `read ${resolved.identity}`);
+    await confirmTier(xdeps, resolved, effective, Boolean(values.yes), `read ${resolved.identity}`);
     const module = await loadPackage(xdeps, resolved);
     const operation = values.metadata ? "metadata" : "read";
     const eventClass = values.metadata ? "metadata-read" : "data-read";
@@ -854,7 +854,7 @@ async function executeCmd(deps: CliDeps, refInput: string | undefined, values: R
         }
     }
 
-    await confirmTier(xdeps, effective, Boolean(values.yes), `execute ${resolved.identity}`);
+    await confirmTier(xdeps, resolved, effective, Boolean(values.yes), `execute ${resolved.identity}`);
     if (dryRunMode === "none" && !values.yes) {
         return { exitCode: 1, stderr: `doax execute: ${resolved.identity} cannot be previewed (dry-run: none); re-run with --yes to proceed` };
     }
