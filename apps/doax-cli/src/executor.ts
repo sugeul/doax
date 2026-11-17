@@ -39,11 +39,12 @@ export interface ResolvedResource {
     /** Registry origin that resolved this resource; packages and audit go back to it. */
     origin: string;
     /**
-     * Tier 2 standing-authorization window in seconds, set by the owning namespace's policy (spec §7.4a).
-     * A confirmed authorization for this Resource stands for this long before the per-call check returns.
-     * 0 or absent means strict per-call: every invocation is re-confirmed.
+     * Maximum lifetime, in seconds, of a Tier 2 authorization token for this Resource, bounded by the owning
+     * namespace's policy (spec §7.4a; the namespace shortening a token's lifetime, §7.2). A confirmed
+     * authorization is held as a token with this lifetime; while it is unexpired the per-call check proceeds.
+     * 0 or absent means strict per-call: every invocation is re-confirmed, no token is issued.
      */
-    standingAuthWindowSeconds?: number;
+    tier2AuthLifetimeSeconds?: number;
 }
 
 /* ---------- the client's registry list: namespaces route to registries (npm-scope style) ---------- */
@@ -244,54 +245,57 @@ export function effectiveTierFor(resolved: ResolvedResource, authenticatorTier: 
     return computeEffectiveTier(resolved.manifest.requiredTier ?? 4, others);
 }
 
-/* ---------- Tier 2 standing authorizations (spec §7.4a) ----------
-   A confirmed Tier 2 authorization is remembered, scoped to one Resource (versionless `@ns/name`), for the
-   window the namespace policy declares. Tier 1 never persists — it is always per-call. This stores no secret;
-   credential material stays in credentials.json. */
+/* ---------- Tier 2 authorization tokens (spec §7.4a) ----------
+   A confirmed Tier 2 authorization is held as a token with a lifetime — not a session — scoped to one Resource
+   (versionless `@ns/name`). While unexpired, the per-call check proceeds without re-confirming; verification is
+   the token's expiry alone, so no party keeps session state. This is how this client (doax-cli) holds the token;
+   any Executor — agent, app, or CLI — holds its own. Tier 1 never issues one. No secret lives here; credential
+   material stays in credentials.json. */
 
-interface GrantEntry {
+interface AuthToken {
     resource: string;
-    grantedAt: string;
-    expiresAt: string;
+    issuedAt: string;
+    /** Expiry; the authorization is valid only while now < exp. */
+    exp: string;
 }
 
-const grantsPath = (deps: ExecutorDeps) => join(deps.home, "grants.json");
+const authTokensPath = (deps: ExecutorDeps) => join(deps.home, "auth-tokens.json");
 
-function readGrants(deps: ExecutorDeps): Record<string, GrantEntry> {
+function readAuthTokens(deps: ExecutorDeps): Record<string, AuthToken> {
     try {
-        return JSON.parse(readFileSync(grantsPath(deps), "utf8")) as Record<string, GrantEntry>;
+        return JSON.parse(readFileSync(authTokensPath(deps), "utf8")) as Record<string, AuthToken>;
     } catch {
         return {};
     }
 }
 
-/** True while a prior Tier 2 authorization for this Resource is still within its window. */
-function activeGrant(deps: ExecutorDeps, resourceKey: string): boolean {
-    const grant = readGrants(deps)[resourceKey];
-    return grant ? Date.parse(grant.expiresAt) > Date.now() : false;
+/** True while a Tier 2 authorization token for this Resource is still within its lifetime. */
+function validAuthToken(deps: ExecutorDeps, resourceKey: string): boolean {
+    const token = readAuthTokens(deps)[resourceKey];
+    return token ? Date.parse(token.exp) > Date.now() : false;
 }
 
-/** Remember a fresh authorization for the window namespace policy allows; no window declared means nothing persists. */
-function recordGrant(deps: ExecutorDeps, resourceKey: string, windowSeconds: number): void {
-    if (!(windowSeconds > 0)) return;
+/** Issue an authorization token for the lifetime namespace policy allows; zero lifetime issues nothing. */
+function issueAuthToken(deps: ExecutorDeps, resourceKey: string, lifetimeSeconds: number): void {
+    if (!(lifetimeSeconds > 0)) return;
     const now = new Date();
-    const all = readGrants(deps);
-    all[resourceKey] = { resource: resourceKey, grantedAt: now.toISOString(), expiresAt: new Date(now.getTime() + windowSeconds * 1000).toISOString() };
+    const all = readAuthTokens(deps);
+    all[resourceKey] = { resource: resourceKey, issuedAt: now.toISOString(), exp: new Date(now.getTime() + lifetimeSeconds * 1000).toISOString() };
     mkdirSync(deps.home, { recursive: true });
-    writeFileSync(grantsPath(deps), JSON.stringify(all, null, 2));
-    chmodSync(grantsPath(deps), 0o600);
+    writeFileSync(authTokensPath(deps), JSON.stringify(all, null, 2));
+    chmodSync(authTokensPath(deps), 0o600);
 }
 
 /**
- * Tier 2 demands per-call authorization; a prior authorization for the same Resource may stand for the window
- * namespace policy sets (spec §7.4a), scoped to that one Resource. Tier 1 is always per-call — a standing
- * authorization never applies to it. Tier 3/4 need no check.
+ * Tier 2 demands per-call authorization; a Tier 2 authorization token for the same Resource may stand until it
+ * expires (spec §7.4a), scoped to that one Resource and bounded by namespace policy. Tier 1 is always per-call —
+ * no authorization token is ever issued for it. Tier 3/4 need no check.
  */
 export async function confirmTier(deps: ExecutorDeps, resolved: ResolvedResource, effective: EffectiveTier, assumeYes: boolean, what: string): Promise<void> {
     if (effective.tier > 2) return;
     const resourceKey = credentialKey(resolved.identity);
-    // Tier 2 only: a standing authorization within the namespace-policy window skips the re-check.
-    if (effective.tier === 2 && activeGrant(deps, resourceKey)) return;
+    // Tier 2 only: an unexpired authorization token for this Resource skips the re-check.
+    if (effective.tier === 2 && validAuthToken(deps, resourceKey)) return;
     if (!assumeYes) {
         if (!deps.prompt) {
             throw new ExecutorError(`tier ${effective.tier} requires per-call confirmation: re-run with --yes`, "authorization-required", {
@@ -302,8 +306,8 @@ export async function confirmTier(deps: ExecutorDeps, resolved: ResolvedResource
         const answer = (await deps.prompt(`Tier ${effective.tier}: authorize ${what}? [y/N] `)).trim().toLowerCase();
         if (answer !== "y" && answer !== "yes") throw new ExecutorError("authorization declined by the caller", "authorization-declined");
     }
-    // Tier 2 only: remember this authorization for the namespace-policy window; Tier 1 never persists.
-    if (effective.tier === 2) recordGrant(deps, resourceKey, resolved.standingAuthWindowSeconds ?? 0);
+    // Tier 2 only: hold this authorization as a token for the namespace-policy lifetime; Tier 1 issues none.
+    if (effective.tier === 2) issueAuthToken(deps, resourceKey, resolved.tier2AuthLifetimeSeconds ?? 0);
 }
 
 /*
