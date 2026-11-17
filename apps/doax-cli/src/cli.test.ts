@@ -123,6 +123,68 @@ describe("doax cli", () => {
         }
     });
 
+    it("whoami fans out to the default registry and every on-prem registry you hold a token for", async () => {
+        const home = mkdtempSync(join(tmpdir(), "doax-whoami-"));
+        try {
+            writeFileSync(
+                join(home, "config.json"),
+                JSON.stringify({
+                    registries: { default: "https://registry.test", "@corp": "https://registry.corp.internal" },
+                    tokens: { "https://registry.test": "doax_pat_global", "https://registry.corp.internal": "doax_pat_corp" },
+                }),
+            );
+            const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+                const url = String(input);
+                const auth = (init?.headers as Record<string, string>).authorization;
+                if (url === "https://registry.test/whoami" && auth === "Bearer doax_pat_global")
+                    return Response.json({ principal: "alice@example.com", namespaces: ["@alice"] });
+                if (url === "https://registry.corp.internal/whoami" && auth === "Bearer doax_pat_corp")
+                    return Response.json({ principal: "alice@corp", namespaces: ["@corp"] });
+                throw new Error(`unexpected fetch ${url} (${auth})`);
+            }) as typeof fetch;
+            const result = await run(["whoami", "--json"], { config: { registry: "https://registry.test" }, fetch: fetchImpl, home });
+            expect(result.exitCode).toBe(0);
+            expect(JSON.parse(result.stdout!)).toEqual({
+                ok: true,
+                registries: [
+                    { registry: "https://registry.test", principal: "alice@example.com", namespaces: ["@alice"] },
+                    { registry: "https://registry.corp.internal", principal: "alice@corp", namespaces: ["@corp"] },
+                ],
+            });
+        } finally {
+            rmSync(home, { recursive: true, force: true });
+        }
+    });
+
+    it("whoami --registry targets just that one registry", async () => {
+        const home = mkdtempSync(join(tmpdir(), "doax-whoami-reg-"));
+        try {
+            writeFileSync(
+                join(home, "config.json"),
+                JSON.stringify({
+                    registries: { default: "https://registry.test", "@corp": "https://registry.corp.internal" },
+                    tokens: { "https://registry.test": "doax_pat_global", "https://registry.corp.internal": "doax_pat_corp" },
+                }),
+            );
+            const fetchImpl = (async (input: string | URL | Request) => {
+                expect(String(input)).toBe("https://registry.corp.internal/whoami");
+                return Response.json({ principal: "alice@corp", namespaces: ["@corp"] });
+            }) as typeof fetch;
+            const result = await run(["whoami", "--registry", "https://registry.corp.internal", "--json"], {
+                config: { registry: "https://registry.test" },
+                fetch: fetchImpl,
+                home,
+            });
+            expect(result.exitCode).toBe(0);
+            expect(JSON.parse(result.stdout!)).toEqual({
+                ok: true,
+                registries: [{ registry: "https://registry.corp.internal", principal: "alice@corp", namespaces: ["@corp"] }],
+            });
+        } finally {
+            rmSync(home, { recursive: true, force: true });
+        }
+    });
+
     it("opens the browser without a shell, so & in the login URL survives on Windows", () => {
         const url = "https://registry.test/auth/login?callback=http%3A%2F%2F127.0.0.1%3A5%2Fx&state=abc";
         expect(browserCommand(url, "win32")).toEqual({ command: "rundll32", args: ["url.dll,FileProtocolHandler", url] });

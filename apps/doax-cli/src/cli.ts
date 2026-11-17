@@ -57,7 +57,7 @@ Usage:
                                               Sign in: email gets a code, code gets a token; store a token directly; or
                                               --web opens the registry's sign-in page and catches the token on loopback
     doax logout [--registry <url>]            Drop the stored token
-    doax whoami                               Show your principal and namespaces
+    doax whoami [--registry <url>]            Show your principal and namespaces (one registry, or every one you're logged in to)
     doax resource-token issue|list <@ns/name> Issue another audit token (the first comes with the first publish), or list them
     doax resource-token revoke <@ns/name> <token-id>
                                               Revoke one; the resource can no longer write audit with it
@@ -214,7 +214,7 @@ export async function run(argv: string[], deps: CliDeps = defaultDeps()): Promis
                 return { exitCode: 0, stdout: json ? JSON.stringify({ ok: true, loggedOut: origin }) : `logged out of ${origin}` };
             }
             case "whoami":
-                return await whoamiCmd(deps, json);
+                return await whoamiCmd(deps, values, json);
             case "resource-token":
                 return await resourceTokenCmd(deps, rest, json);
             default:
@@ -496,15 +496,31 @@ async function loginCmd(deps: CliDeps, values: Record<string, unknown>, json: bo
     };
 }
 
-async function whoamiCmd(deps: CliDeps, json: boolean): Promise<CliResult> {
+async function whoamiCmd(deps: CliDeps, values: Record<string, unknown>, json: boolean): Promise<CliResult> {
     const xdeps = executorDeps(deps);
-    const origin = readRegistryMap(xdeps).default;
-    const token = tokenFor(xdeps, origin);
-    if (!token) return { exitCode: 1, stderr: `doax whoami: not logged in to ${origin}; run doax login` };
-    const res = await deps.fetch(`${origin}/whoami`, { headers: { authorization: `Bearer ${token}` } });
-    const body = (await res.json()) as { principal?: string; namespaces?: string[]; error?: string };
-    if (!res.ok) return { exitCode: 1, stderr: `doax whoami: ${body.error ?? res.status}` };
-    return { exitCode: 0, stdout: json ? JSON.stringify({ ok: true, ...body }) : `${body.principal} @ ${origin}\nnamespaces: ${(body.namespaces ?? []).join(", ") || "none"}` };
+    const map = readRegistryMap(xdeps);
+    const override = (values.registry as string | undefined)?.replace(/\/+$/, "");
+    // --registry targets one registry; otherwise the default plus every on-prem (scoped) registry you hold a token for.
+    const origins = override ? [override] : [...new Set([map.default, ...Object.values(map.scopes)])];
+    const targets = origins.filter((o) => tokenFor(xdeps, o));
+    if (targets.length === 0) return { exitCode: 1, stderr: `doax whoami: not logged in to ${override ?? map.default}; run doax login` };
+    const results = await Promise.all(
+        targets.map(async (origin) => {
+            const res = await deps.fetch(`${origin}/whoami`, { headers: { authorization: `Bearer ${tokenFor(xdeps, origin)}` } });
+            const body = (await res.json()) as { principal?: string; namespaces?: string[]; error?: string };
+            return res.ok
+                ? { registry: origin, principal: body.principal, namespaces: body.namespaces ?? [] }
+                : { registry: origin, error: String(body.error ?? res.status) };
+        }),
+    );
+    const ok = results.filter((r) => !("error" in r)) as { registry: string; principal?: string; namespaces: string[] }[];
+    const failed = results.filter((r) => "error" in r) as { registry: string; error: string }[];
+    if (json) return { exitCode: ok.length ? 0 : 1, stdout: JSON.stringify({ ok: ok.length > 0, registries: results }) };
+    return {
+        exitCode: ok.length ? 0 : 1,
+        stdout: ok.map((r) => `${r.principal} @ ${r.registry}\nnamespaces: ${r.namespaces.join(", ") || "none"}`).join("\n\n") || undefined,
+        stderr: failed.map((r) => `doax whoami: ${r.registry}: ${r.error}`).join("\n") || undefined,
+    };
 }
 
 /** Resource tokens (spec §8.2a): the credential a Resource writes its own audit with. */
