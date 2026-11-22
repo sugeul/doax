@@ -1,6 +1,8 @@
 # No pasted tokens for hosted resources over the MCP Gateway
 
-Status: proposal. Nothing here is implemented.
+Status: Change A's **gateway half is implemented and deployed** (`apps/mcp-gateway`): the 401 and the
+RFC 9728 metadata, off by default. The registry's OAuth endpoints (Change A, auth-server half) and
+Change B are not yet implemented — a registry operator builds their half; see the operator guide below.
 Scope: doax spec v0.1, `apps/mcp-gateway`, `apps/doax-cli` (executor core). Found while running the
 gateway (305d679) in front of a private registry (day1-doax) whose first tenant is `@fadmin`.
 
@@ -88,6 +90,59 @@ returns `needs_mint`, and neither `secret` nor a cookie is needed.
 - Web agent: add the connector, sign in once in the browser, read `@ns/resource`. No token is seen.
 - CLI: `doax login --web`, then `doax read @ns/resource`. The `doax auth <authenticator> --secret`
   step disappears for exchange Authenticators.
+
+## Building a registry's MCP-login pair (operator guide)
+
+A registry and its gateway are a 1:1 pair, deployed together, the gateway's domain derived from the
+registry's: `registry.doax.io` ↔ `mcp.doax.io`, `day1-doax` ↔ `doax-mcp.internal.day1ax`. Because
+they are a pair, the gateway's authorization server is always the paired registry — there is nothing
+to look up or configure beyond the pointer.
+
+### The gateway: reuse `apps/mcp-gateway`, set three variables
+
+The gateway half of Change A is already built; an operator runs the same `apps/mcp-gateway` as their
+pair's gateway and configures it:
+
+- `DOAX_REGISTRY` — the paired registry's origin (e.g. `https://day1-doax.internal`). The gateway
+  forwards the caller's token only here, and advertises it as the sole `authorization_servers` entry.
+- `DOAX_REQUIRE_LOGIN=1` — force the MCP OAuth flow. Leave unset for a public registry that resolves
+  anonymously; set it for a private one, so a tokenless request is answered `401`.
+- `DOAX_GATEWAY_ORIGIN` — the gateway's own public URL. The RFC 9728 `resource` must equal the MCP
+  URL the client connects to, exactly; set this when the request `Host` is not that URL (behind a
+  proxy, a different edge host). Otherwise the gateway derives it from `Host`.
+
+With those set, the gateway already answers `401` with `WWW-Authenticate: Bearer resource_metadata=…`
+and serves `GET /.well-known/oauth-protected-resource`. Nothing else on the gateway is needed.
+
+### The auth server: build these OAuth endpoints on the registry
+
+This is the operator's half — an OAuth 2.1 authorization server in front of the registry's existing
+login, issuing ordinary Registry tokens (spec §7.2). A checklist:
+
+1. **RFC 8414 metadata** at `/.well-known/oauth-authorization-server` (the gateway points clients at
+   the registry; the client fetches this from the registry).
+2. **Authorization endpoint** wrapping the existing login page, requiring **PKCE `S256`**, redirecting
+   only to the client's registered callback.
+3. **Token endpoint**, `application/x-www-form-urlencoded`, issuing a Registry token (§7.2) as the
+   access token plus a **refresh token it rotates**. Nothing about the token or who may sign in
+   changes — only the copying goes away (as in §7.7).
+4. **Client identity** by Client ID Metadata Document (if the metadata advertises
+   `client_id_metadata_document_supported: true` and `none` auth) or Dynamic Client Registration
+   (RFC 7591).
+5. **Answer within 10 seconds** on discovery, registration, and token endpoints.
+
+The access token is the Registry token and the gateway forwards it to the Registry — safe **only
+because the gateway fronts the registry that minted it** (the pairing invariant). A gateway must
+never forward a token to a registry that did not issue it.
+
+### Client notes (checked against claude.com/docs/connectors)
+
+- The `401` is required; a `WWW-Authenticate` on a `200` is ignored.
+- Callback: `https://claude.ai/api/mcp/auth_callback` for claude.ai and its apps; Claude Code uses a
+  loopback callback on an ephemeral port.
+- `S256` PKCE on every request; the client refreshes on `401` and up to five minutes before expiry.
+- Only the first `authorization_servers` entry is used; the auth server may be on another host than
+  the gateway; `resource` must equal the MCP URL exactly.
 
 ## Not covered here (open in 305d679)
 
