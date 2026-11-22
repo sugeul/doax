@@ -36,6 +36,21 @@ case ":${PATH}:" in
         echo "    export PATH=\"${BIN_DIR}:\$PATH\""
         ;;
 esac
+
+# doax is also an MCP server for agents: `doax mcp` over stdio (architecture §3).
+# Register it with Claude Code if present; otherwise print the config any MCP agent can read.
+if command -v claude >/dev/null 2>&1; then
+    if claude mcp add doax -- "${BIN_DIR}/doax" mcp >/dev/null 2>&1; then
+        echo
+        echo "registered the doax MCP server with Claude Code (claude mcp add doax)"
+    fi
+else
+    echo
+    echo "to give an MCP agent the doax catalog, add this to its MCP config (e.g. .mcp.json):"
+    echo "    { \"mcpServers\": { \"doax\": { \"command\": \"${BIN_DIR}/doax\", \"args\": [\"mcp\"] } } }"
+    echo "or pin one resource:  ${BIN_DIR}/doax mcp @ns/name"
+fi
+
 echo
 echo "try:  doax status"
 echo "      doax search slack"

@@ -63,6 +63,9 @@ Usage:
                                               Revoke one; the resource can no longer write audit with it
     doax audit [--class <c>] [--actor <a>] [--resource <@ns/name>] [--since <iso>] [--limit <n>]
                                               Query the audit log for your namespaces (owners see their events)
+    doax mcp [<@ns/name[@version]>]           Serve MCP over stdio for an agent: the whole catalog (gateway),
+                                              or one resource pre-bound to its ref. Reads inline; effecting work
+                                              hands back the guarded doax command (architecture §3).
     doax --version | --help
 
 Every command runs non-interactively for agent callers:
@@ -215,6 +218,11 @@ export async function run(argv: string[], deps: CliDeps = defaultDeps()): Promis
             }
             case "whoami":
                 return await whoamiCmd(deps, values, json);
+            case "mcp": {
+                const { serveMcp } = await import("./mcp.ts");
+                await serveMcp(rest, deps);
+                return { exitCode: 0 };
+            }
             case "resource-token":
                 return await resourceTokenCmd(deps, rest, json);
             default:
