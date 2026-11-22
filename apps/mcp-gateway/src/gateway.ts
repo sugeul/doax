@@ -1,3 +1,4 @@
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -52,7 +53,7 @@ const DRY_RUN_TOOL = {
 const EXECUTE_TOOL = {
     name: "doax_execute",
     description:
-        "Run an action — gated behind human approval. Without `approval` it returns the dry-run preview and asks for it; a human (not the agent) must approve. Effecting execution turns on once the gateway's approval channel is configured.",
+        "Run an action — gated behind human approval (spec §6.4). Without `approval` it returns the dry-run preview and a binding to approve; re-call with a token an approver minted after a human consented. The approver channel is pluggable; no channel is baked in.",
     inputSchema: { type: "object", properties: { ref: { type: "string" }, params: { type: "object" }, approval: { type: "string" } }, required: ["ref"] },
 };
 
@@ -61,20 +62,50 @@ async function dryRun(deps: CliDeps, ref: string, params: unknown): Promise<stri
     return r.exitCode === 0 ? (r.stdout ?? "{}") : (r.stderr ?? "dry-run failed");
 }
 
-async function executeStep(deps: CliDeps, args: Record<string, unknown>) {
-    const preview = await dryRun(deps, String(args.ref ?? ""), args.params);
-    if (!args.approval) {
-        return asText(
-            JSON.stringify(
-                { status: "approval_required", preview: safeJson(preview), howto: "A human — not the agent — must approve this action, then re-call doax_execute with the approval handle." },
-                null,
-                2,
-            ),
-        );
+/* approval pattern (spec §6.4, channel §14 deferred): the gateway verifies a token bound to this exact
+   invocation and signed by a trusted approver (DOAX_APPROVAL_KEY). Any channel — hosted page, messenger,
+   chat surface — that gets human consent and signs the binding is an approver; the gateway stays agnostic. */
+
+const APPROVAL_KEY = process.env.DOAX_APPROVAL_KEY;
+
+/** What an approval is bound to: this caller's exact invocation (ref + params). */
+function binding(ref: string, params: unknown): string {
+    return createHash("sha256").update(JSON.stringify({ ref, params: params ?? {} })).digest("base64url");
+}
+
+/** A token is `<payload>.<sig>`, payload = base64url(JSON {b, exp}), sig = HMAC-SHA256(key, payload). */
+function approved(token: string, bound: string): boolean {
+    if (!APPROVAL_KEY) return false;
+    const dot = token.lastIndexOf(".");
+    if (dot < 1) return false;
+    const payloadB64 = token.slice(0, dot);
+    const want = Buffer.from(createHmac("sha256", APPROVAL_KEY).update(payloadB64).digest("base64url"));
+    const got = Buffer.from(token.slice(dot + 1));
+    if (want.length !== got.length || !timingSafeEqual(want, got)) return false;
+    try {
+        const p = JSON.parse(Buffer.from(payloadB64, "base64url").toString()) as { b?: string; exp?: number };
+        return p.b === bound && typeof p.exp === "number" && p.exp > Date.now() / 1000;
+    } catch {
+        return false;
     }
-    // The agent presented an approval, but this gateway cannot yet verify it came from the human (§4/§5),
-    // so it refuses rather than trust the caller: effecting execution stays off until the channel exists.
-    return asText("Effecting execution over MCP needs the gateway's human-approval channel, which is not yet enabled. Reads and dry-runs are served.", true);
+}
+
+async function executeStep(deps: CliDeps, args: Record<string, unknown>) {
+    const ref = String(args.ref ?? "");
+    const bound = binding(ref, args.params);
+    if (args.approval && approved(String(args.approval), bound)) {
+        // The approval is the human's authorization; run for real (--yes records it, no interactive confirm).
+        const r = await run(["execute", ref, ...paramArgs(args.params), "--yes", "--json", "--no-input"], deps);
+        return r.exitCode === 0 ? asText(r.stdout ?? "{}") : asText(r.stderr ?? "execute failed", true);
+    }
+    const preview = await dryRun(deps, ref, args.params);
+    return asText(
+        JSON.stringify(
+            { status: "approval_required", binding: bound, preview: safeJson(preview), howto: "An approver signs {\"b\":<binding>,\"exp\":<unix>} after a human consents; re-call with the token. No approver until DOAX_APPROVAL_KEY is set." },
+            null,
+            2,
+        ),
+    );
 }
 
 /** Reuse handle() for everything but the two-step tools. */
