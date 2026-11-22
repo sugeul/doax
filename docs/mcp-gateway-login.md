@@ -144,16 +144,15 @@ never forward a token to a registry that did not issue it.
 - Only the first `authorization_servers` entry is used; the auth server may be on another host than
   the gateway; `resource` must equal the MCP URL exactly.
 
-## Not covered here (open in 305d679)
+## Closed (were open in 305d679)
 
-- A Tier 2 `read` or `execute` over the gateway always ends at `needs_mint` / `authorization-required`:
-  the core accepts `--yes` or `auth-tokens.json`, and the gateway rebuilds only `credentials.json`
-  from cookies, so no second call can carry the authorization.
-- A cached cookie wins over a supplied `secret`, so an expired credential cannot be replaced until
-  the cookie expires.
-- A cookie is reused at Tier 1 (§4.7 says the Authenticator runs at every invocation).
-- `Authorization` is forwarded when the URL text starts with the registry address, not when its
-  origin matches.
+- Tier 2 `read`/`execute` over the gateway now completes: the gateway cookies `auth-tokens.json`
+  alongside `credentials.json` (every token and authorization lives in the cookie), and
+  `doax_execute` takes `yes: true` to authorize — the Tier 2 token is minted and cached in the
+  cookie for its window; Tier 1 authorizes every call (§4.7).
+- A supplied `secret` re-authenticates instead of losing to a cached credential.
+- A Tier 1 Authenticator runs on every call (§4.7); its credential is not reused.
+- `Authorization` is forwarded only to the registry's own origin, not any URL that starts with it.
 
 ## Work by repository
 

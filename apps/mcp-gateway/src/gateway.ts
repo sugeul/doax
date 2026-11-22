@@ -16,7 +16,8 @@ import { type CliDeps, handle, type JsonRpcMessage, type Mode, run } from "doax-
 
 export const REGISTRY = (process.env.DOAX_REGISTRY ?? "https://registry.doax.io").replace(/\/+$/, "");
 const MODE: Mode = { single: false };
-const COOKIE_PREFIX = "doax_tok_";
+const COOKIE_CRED = "doax_tok_";
+const COOKIE_AUTH = "doax_auth_";
 
 export const REQUIRE_LOGIN = process.env.DOAX_REQUIRE_LOGIN === "1";
 export const PROTECTED_RESOURCE_PATH = "/.well-known/oauth-protected-resource";
@@ -70,32 +71,45 @@ function depsFor(token: string | undefined, home: string): CliDeps {
 
 /* cookie <-> credential store */
 
-function cookiesToCreds(home: string, cookies: Record<string, string>): void {
+function cookiesToFiles(home: string, cookies: Record<string, string>): void {
     const creds: Record<string, unknown> = {};
+    const auth: Record<string, unknown> = {};
     for (const [name, value] of Object.entries(cookies)) {
-        if (!name.startsWith(COOKIE_PREFIX)) continue;
+        let entry: Record<string, unknown>;
         try {
-            const entry = JSON.parse(Buffer.from(value, "base64url").toString()) as { authenticator: string };
-            const ref = parseResourceRef(entry.authenticator);
-            creds[`@${ref.namespace}/${ref.name}`] = entry;
+            entry = JSON.parse(Buffer.from(value, "base64url").toString()) as Record<string, unknown>;
         } catch {
-            /* a malformed cookie is simply an absent credential */
+            continue;
+        }
+        if (name.startsWith(COOKIE_CRED) && typeof entry.authenticator === "string") {
+            try {
+                const ref = parseResourceRef(entry.authenticator);
+                creds[`@${ref.namespace}/${ref.name}`] = entry;
+            } catch {
+                continue;
+            }
+        } else if (name.startsWith(COOKIE_AUTH) && typeof entry.resource === "string") {
+            auth[entry.resource] = entry;
         }
     }
     if (Object.keys(creds).length) writeFileSync(join(home, "credentials.json"), JSON.stringify(creds));
+    if (Object.keys(auth).length) writeFileSync(join(home, "auth-tokens.json"), JSON.stringify(auth));
 }
 
-function credsToCookies(home: string): SetCookie[] {
-    let creds: Record<string, { authenticator: string }> = {};
-    try {
-        creds = JSON.parse(readFileSync(join(home, "credentials.json"), "utf8")) as typeof creds;
-    } catch {
-        return [];
-    }
-    return Object.entries(creds).map(([key, entry]) => ({
-        name: COOKIE_PREFIX + key.replace(/[^a-zA-Z0-9]/g, "_"),
-        value: Buffer.from(JSON.stringify(entry)).toString("base64url"),
-    }));
+function filesToCookies(home: string): SetCookie[] {
+    const out: SetCookie[] = [];
+    const add = (prefix: string, file: string) => {
+        let obj: Record<string, unknown> = {};
+        try {
+            obj = JSON.parse(readFileSync(join(home, file), "utf8")) as Record<string, unknown>;
+        } catch {
+            return;
+        }
+        for (const [key, entry] of Object.entries(obj)) out.push({ name: prefix + key.replace(/[^a-zA-Z0-9]/g, "_"), value: Buffer.from(JSON.stringify(entry)).toString("base64url") });
+    };
+    add(COOKIE_CRED, "credentials.json");
+    add(COOKIE_AUTH, "auth-tokens.json");
+    return out;
 }
 
 /* tools: discovery via handle(); read/execute owned here so the mint secret and cookie threading apply */
@@ -119,8 +133,8 @@ const DRY_RUN_TOOL = {
 };
 const EXECUTE_TOOL = {
     name: "doax_execute",
-    description: "Run an action. A Tier 1/2 action needs human authorization (itself a minted token); without it the call returns the guarded next step, never a silent effect.",
-    inputSchema: { type: "object", properties: { ref: { type: "string" }, params: { type: "object" }, ...SECRET_PROP }, required: ["ref"] },
+    description: "Run an action. Tier 1/2 needs the caller's authorization: pass `yes: true`. Tier 2 caches it in the cookie for its window; Tier 1 needs it every call.",
+    inputSchema: { type: "object", properties: { ref: { type: "string" }, params: { type: "object" }, yes: { type: "boolean" }, ...SECRET_PROP }, required: ["ref"] },
 };
 
 const argStrings = (args: Record<string, unknown>): string[] => [...paramArgs(args.params), ...(typeof args.secret === "string" ? ["--secret", args.secret] : [])];
@@ -147,7 +161,7 @@ async function readTool(deps: CliDeps, args: Record<string, unknown>) {
 }
 
 async function executeTool(deps: CliDeps, args: Record<string, unknown>, dryRun: boolean) {
-    const extra = [...argStrings(args), ...(dryRun ? ["--dry-run"] : [])];
+    const extra = [...argStrings(args), ...(dryRun ? ["--dry-run"] : args.yes ? ["--yes"] : [])];
     const r = await run(["execute", String(args.ref ?? ""), ...extra, "--json", "--no-input"], deps);
     return r.exitCode === 0 ? asText(r.stdout ?? "") : handbackOrError(r.stderr);
 }
@@ -172,9 +186,9 @@ async function route(deps: CliDeps, msg: JsonRpcMessage): Promise<unknown> {
 export async function handleRpc(ctx: { token?: string; cookies: Record<string, string> }, msg: JsonRpcMessage): Promise<{ result: unknown; setCookies: SetCookie[] }> {
     const home = freshHome();
     try {
-        cookiesToCreds(home, ctx.cookies);
+        cookiesToFiles(home, ctx.cookies);
         const result = await route(depsFor(ctx.token, home), msg);
-        return { result, setCookies: credsToCookies(home) };
+        return { result, setCookies: filesToCookies(home) };
     } finally {
         rmSync(home, { recursive: true, force: true });
     }
