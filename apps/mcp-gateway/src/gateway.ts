@@ -123,8 +123,8 @@ const asText = (value: string, isError = false) => ({ content: [{ type: "text", 
 const SECRET_PROP = { secret: { type: "string", description: "mint the authenticator's token on first use; cached in the cookie afterward" } };
 const READ_TOOL = {
     name: "doax_read",
-    description: "Read a data-source. Needs the authenticator's token; the gateway caches the minted token in your cookie. Pass `secret` to mint on first use.",
-    inputSchema: { type: "object", properties: { ref: { type: "string" }, params: { type: "object" }, metadata: { type: "boolean" }, ...SECRET_PROP }, required: ["ref"] },
+    description: "Read a data-source. Needs the authenticator's token; the gateway caches the minted token in your cookie. Pass `secret` to mint on first use; a Tier 1/2 source needs `yes: true` to authorize.",
+    inputSchema: { type: "object", properties: { ref: { type: "string" }, params: { type: "object" }, metadata: { type: "boolean" }, yes: { type: "boolean" }, ...SECRET_PROP }, required: ["ref"] },
 };
 const DRY_RUN_TOOL = {
     name: "doax_dry_run",
@@ -155,7 +155,7 @@ function handbackOrError(stderr: string | undefined) {
 }
 
 async function readTool(deps: CliDeps, args: Record<string, unknown>) {
-    const extra = [...argStrings(args), ...(args.metadata ? ["--metadata"] : [])];
+    const extra = [...argStrings(args), ...(args.yes ? ["--yes"] : []), ...(args.metadata ? ["--metadata"] : [])];
     const r = await run(["read", String(args.ref ?? ""), ...extra, "--json", "--no-input"], deps);
     return r.exitCode === 0 ? asText(r.stdout ?? "") : handbackOrError(r.stderr);
 }
