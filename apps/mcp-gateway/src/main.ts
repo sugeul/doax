@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { createServer } from "node:http";
-import { bearer, handleRpc, type JsonRpcMessage, parseCookies, REGISTRY, rpcError, setCookieHeader } from "./gateway.ts";
+import { bearer, challenge, gatewayOrigin, handleRpc, type JsonRpcMessage, parseCookies, PROTECTED_RESOURCE_PATH, protectedResource, REGISTRY, REQUIRE_LOGIN, rpcError, setCookieHeader } from "./gateway.ts";
 
 /** Local/on-prem HTTP transport for the gateway (or `dev`). The Lambda handler is lambda.ts. */
 
@@ -8,12 +8,21 @@ const PORT = Number(process.env.PORT ?? 8080);
 const JSON_CT = { "content-type": "application/json" };
 
 const server = createServer((req, res) => {
+    if (req.method === "GET" && req.url === PROTECTED_RESOURCE_PATH) {
+        res.writeHead(200, JSON_CT).end(JSON.stringify(protectedResource(gatewayOrigin(req.headers.host))));
+        return;
+    }
     if (req.method === "GET" && req.url === "/health") {
         res.writeHead(200).end("ok");
         return;
     }
     if (req.method !== "POST") {
         res.writeHead(405).end();
+        return;
+    }
+    const token = bearer(req.headers.authorization);
+    if (!token && REQUIRE_LOGIN) {
+        res.writeHead(401, { "www-authenticate": challenge(gatewayOrigin(req.headers.host)) }).end();
         return;
     }
     let body = "";
@@ -31,7 +40,7 @@ const server = createServer((req, res) => {
         }
         const isRequest = msg.id !== undefined && msg.id !== null;
         try {
-            const { result, setCookies } = await handleRpc({ token: bearer(req.headers.authorization), cookies: parseCookies(req.headers.cookie) }, msg);
+            const { result, setCookies } = await handleRpc({ token, cookies: parseCookies(req.headers.cookie) }, msg);
             const cookies = setCookies.map(setCookieHeader);
             if (!isRequest) {
                 res.writeHead(202, cookies.length ? { "set-cookie": cookies } : undefined).end();

@@ -18,6 +18,15 @@ export const REGISTRY = (process.env.DOAX_REGISTRY ?? "https://registry.doax.io"
 const MODE: Mode = { single: false };
 const COOKIE_PREFIX = "doax_tok_";
 
+export const REQUIRE_LOGIN = process.env.DOAX_REQUIRE_LOGIN === "1";
+export const PROTECTED_RESOURCE_PATH = "/.well-known/oauth-protected-resource";
+
+export const gatewayOrigin = (host: string | undefined): string => (process.env.DOAX_GATEWAY_ORIGIN ?? `https://${host ?? ""}`).replace(/\/+$/, "");
+
+export const protectedResource = (origin: string): { resource: string; authorization_servers: string[] } => ({ resource: `${origin}/`, authorization_servers: [REGISTRY] });
+
+export const challenge = (origin: string): string => `Bearer resource_metadata="${origin}${PROTECTED_RESOURCE_PATH}"`;
+
 // Content-addressed package cache, safe to share across callers; credentials never are.
 const CACHE = join(tmpdir(), "doax-mcp-cache");
 mkdirSync(CACHE, { recursive: true });
