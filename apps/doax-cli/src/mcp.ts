@@ -160,18 +160,20 @@ function singleTools(mode: Mode): ToolDef[] {
 }
 
 async function callTool(deps: CliDeps, mode: Mode, name: string, args: Record<string, unknown>): Promise<ReturnType<typeof text>> {
-    // In single-resource mode the ref is fixed; in gateway mode it comes in the arguments.
-    const ref = mode.single ? mode.ref! : (args.ref as string);
     const op = mode.single ? name : name.replace(/^doax_/, "");
 
+    // Search takes a query, not a ref — it runs before the ref guard the other ops need.
+    if (op === "search") {
+        const kind = args.kind as string | undefined;
+        const res = await run(["search", String(args.query ?? ""), ...(kind ? ["--kind", kind] : []), "--json"], deps);
+        return res.exitCode === 0 ? text(res.stdout ?? "") : text(res.stderr ?? "search failed", true);
+    }
+
+    // In single-resource mode the ref is fixed; in gateway mode it comes in the arguments.
+    const ref = mode.single ? mode.ref! : (args.ref as string);
     if (!ref) return text("missing resource ref", true);
 
     switch (op) {
-        case "search": {
-            const kind = args.kind as string | undefined;
-            const res = await run(["search", String(args.query ?? ""), ...(kind ? ["--kind", kind] : []), "--json"], deps);
-            return res.exitCode === 0 ? text(res.stdout ?? "") : text(res.stderr ?? "search failed", true);
-        }
         case "describe": {
             const res = await run(["resolve", ref, "--json"], deps);
             return res.exitCode === 0 ? text(res.stdout ?? "") : text(res.stderr ?? "describe failed", true);
