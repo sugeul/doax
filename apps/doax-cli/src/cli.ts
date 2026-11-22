@@ -745,8 +745,7 @@ async function credentialFor(deps: ExecutorDeps, resolved: ResolvedResource, inl
     const authResolved = await resolveResource(deps, String(authRef));
     const authTier = (authResolved.manifest.requiredTier as Tier | undefined) ?? null;
     const effective = effectiveTierFor(resolved, authTier);
-    // A Tier 1 Authenticator runs on every call (§4.7); an explicit secret re-authenticates — otherwise reuse the cache.
-    let entry = authTier === 1 || inlineSecret ? undefined : readCredentials(deps)[credentialKey(String(authRef))];
+    let entry = effective.tier === 1 || inlineSecret ? undefined : readCredentials(deps)[credentialKey(String(authRef))];
     if (!entry && inlineSecret) {
         entry = await acquireCredential(deps, authResolved, inlineSecret);
     }
