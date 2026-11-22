@@ -124,6 +124,25 @@
         <tr><td><code>--yes</code></td><td>grant tier-2 per-call authorization</td></tr>
     </table>
 
+    <h2>For agents (as an MCP server)</h2>
+    <p>The same binary is also an <a href="https://modelcontextprotocol.io" rel="noopener">MCP</a> server over stdio, so an agent reaches the catalog natively. The installer registers it with Claude Code for you (<code>claude mcp add doax</code>); otherwise add it to any MCP client's config:</p>
+    <pre><span class="p">$</span> claude mcp add doax -- doax mcp        <span class="c"># Claude Code</span>
+
+<span class="c"># or, for any MCP client — e.g. .mcp.json</span>
+{ "mcpServers": { "doax": { "command": "doax", "args": ["mcp"] } } }</pre>
+    <p>Two shapes, one command. <code>doax mcp</code> is a gateway over the whole catalog; <code>doax mcp @ns/name</code> pins one resource as its own connector:</p>
+    <pre><span class="p">$</span> doax mcp                        <span class="c"># gateway: search + read across the catalog</span>
+<span class="p">$</span> doax mcp @koreanmate/train-book <span class="c"># one resource, its own tools</span></pre>
+    <p>The transport boundary is the risk boundary: the agent <em>pulls data</em> freely — a non-interactive read is inlined into the tool result — while anything that <em>changes the world</em>, or needs interactive sign-in, hands back the exact <code>doax</code> command to run through the guarded CLI. The tier a resource demands is never weakened over MCP.</p>
+    <table>
+        <tr><th>tool</th><th>does</th></tr>
+        <tr><td><code>doax_search</code></td><td>find resources on the registry</td></tr>
+        <tr><td><code>doax_describe</code></td><td>resolve one resource's manifest, tier and interface</td></tr>
+        <tr><td><code>doax_read</code></td><td>read a data-source inline; hands back the command when it needs auth</td></tr>
+        <tr><td><code>doax_execute</code></td><td>returns the guarded <code>doax execute</code> command — never runs an effect over MCP</td></tr>
+    </table>
+    <p>Discovery is exposed as read-only resources too: <code>doax://registries</code>, <code>doax://whoami</code>, and <code>doax://resource/{ns}/{name}</code> for a manifest.</p>
+
     <h2>Sign in</h2>
     <pre><span class="p">$</span> doax login --email you@example.com
 <span class="c"># a 6-digit code arrives by mail; enter it (or re-run with --code 123456)</span>

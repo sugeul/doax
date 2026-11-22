@@ -28,6 +28,18 @@ curl -fsSL https://doax.io/install.sh | bash
 # needs Node >= 20 and curl; installs `doax` into ~/.local/bin
 ```
 
+# As an MCP server
+
+doax is also an MCP server over stdio — reach the catalog as native tools instead of shelling out.
+
+```sh
+claude mcp add doax -- doax mcp          # register with Claude Code (the installer does this if `claude` is present)
+doax mcp                                 # gateway: tools doax_search / doax_describe / doax_read / doax_execute
+doax mcp @koreanmate/train-book          # pin one resource as its own connector
+```
+
+A non-interactive read is inlined into the tool result; anything effecting or needing sign-in returns the exact `doax` command to run through the guarded CLI — the tier is never weakened. Discovery is read-only resources: `doax://registries`, `doax://whoami`, `doax://resource/{ns}/{name}`.
+
 # Common tasks
 
 Always pass `--json --no-input` when you are the caller.
