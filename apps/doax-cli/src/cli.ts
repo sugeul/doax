@@ -61,8 +61,8 @@ Usage:
     doax resource-token issue|list <@ns/name> Issue another audit token (the first comes with the first publish), or list them
     doax resource-token revoke <@ns/name> <token-id>
                                               Revoke one; the resource can no longer write audit with it
-    doax audit [--class <c>] [--actor <a>] [--resource <@ns/name>] [--since <iso>] [--limit <n>]
-                                              Query the audit log for your namespaces (owners see their events)
+    doax audit --registry <url> [--class <c>] [--actor <a>] [--resource <@ns/name>] [--since <iso>] [--limit <n>]
+                                              Query one registry's audit log for your namespaces (owners see their events)
     doax mcp [<@ns/name[@version]>]           Serve MCP over stdio for an agent: the whole catalog (gateway),
                                               or one resource pre-bound to its ref. Reads inline; effecting work
                                               hands back the guarded doax command (architecture §3).
@@ -570,7 +570,8 @@ async function resourceTokenCmd(deps: CliDeps, rest: string[], json: boolean): P
 /** Audit query (spec §8.5): your token sees your namespaces; the operator token sees all. */
 async function auditCmd(deps: CliDeps, values: Record<string, unknown>, json: boolean): Promise<CliResult> {
     const xdeps = executorDeps(deps);
-    const base = readRegistryMap(xdeps).default;
+    const base = (values.registry as string | undefined)?.replace(/\/+$/, "");
+    if (!base) return { exitCode: 2, stderr: "doax audit: --registry <url> is required" };
     const bearer = tokenFor(xdeps, base);
     const admin = process.env.DOAX_ADMIN_TOKEN;
     if (!bearer && !admin) return { exitCode: 2, stderr: "doax audit: log in first (doax login), or set DOAX_ADMIN_TOKEN as the operator" };
@@ -625,24 +626,41 @@ function registryCmd(deps: CliDeps, rest: string[], json: boolean): CliResult {
 }
 
 async function search(deps: CliDeps, query: string, kind: string | undefined, json: boolean): Promise<CliResult> {
-    const url = new URL(`${readRegistryMap(executorDeps(deps)).default}/search`);
-    url.searchParams.set("q", query);
-    if (kind) url.searchParams.set("kind", kind);
-    const res = await deps.fetch(url);
-    const body = (await res.json()) as { results?: ResolvedResource[]; error?: string };
-    if (!res.ok || !body.results) {
-        return {
-            exitCode: 1,
-            stderr: json ? JSON.stringify({ ok: false, error: body.error ?? String(res.status) }) : `doax search: ${body.error ?? res.status}`,
-        };
+    const xdeps = executorDeps(deps);
+    const map = readRegistryMap(xdeps);
+    const origins = [...new Set([map.default, ...Object.values(map.scopes)])];
+    const settled = await Promise.all(
+        origins.map(async (origin): Promise<{ origin: string; results: ResolvedResource[] } | { origin: string; error: string }> => {
+            const url = new URL(`${origin}/search`);
+            url.searchParams.set("q", query);
+            if (kind) url.searchParams.set("kind", kind);
+            try {
+                const res = await deps.fetch(url, { headers: authHeaders(xdeps, origin) });
+                const body = (await res.json()) as { results?: ResolvedResource[]; error?: string };
+                if (!res.ok || !body.results) return { origin, error: String(body.error ?? res.status) };
+                return { origin, results: body.results };
+            } catch (err) {
+                return { origin, error: (err as Error).message };
+            }
+        }),
+    );
+    const results = settled.flatMap((s) => ("results" in s ? s.results : []));
+    const failed = settled.filter((s): s is { origin: string; error: string } => "error" in s);
+
+    if (results.length === 0 && failed.length === origins.length) {
+        const detail = failed.map((f) => `${f.origin}: ${f.error}`).join("; ");
+        return { exitCode: 1, stderr: json ? JSON.stringify({ ok: false, error: detail }) : `doax search: ${detail}` };
     }
-    if (json) return { exitCode: 0, stdout: JSON.stringify({ ok: true, query, results: body.results }) };
-    if (body.results.length === 0) return { exitCode: 0, stdout: `no resources match "${query}"` };
-    const lines = body.results.map((r) => {
+    if (json) {
+        return { exitCode: 0, stdout: JSON.stringify({ ok: true, query, results, unreachable: failed.map((f) => ({ registry: f.origin, error: f.error })) }) };
+    }
+    const note = failed.length ? `\n(unreachable: ${failed.map((f) => f.origin).join(", ")})` : "";
+    if (results.length === 0) return { exitCode: 0, stdout: `no resources match "${query}"${note}` };
+    const lines = results.map((r) => {
         const m = r.manifest as { requiredTier?: number; summary?: string };
         return `${r.identity}\n    ${r.kind} · tier ${m.requiredTier ?? "?"} · ${r.verification}\n    ${m.summary ?? ""}`;
     });
-    return { exitCode: 0, stdout: lines.join("\n") };
+    return { exitCode: 0, stdout: lines.join("\n") + note };
 }
 
 async function resolveCmd(deps: CliDeps, refInput: string | undefined): Promise<CliResult> {
