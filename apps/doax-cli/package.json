@@ -7,6 +7,13 @@
     "bin": {
         "doax": "./dist/main.js"
     },
+    "exports": {
+        "./mcp": {
+            "@doax/source": "./src/mcp.ts",
+            "types": "./dist/mcp.d.ts",
+            "default": "./dist/mcp.js"
+        }
+    },
     "files": ["dist"],
     "engines": {
         "node": ">=24"

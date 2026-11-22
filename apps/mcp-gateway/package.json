@@ -1,0 +1,27 @@
+{
+    "name": "@doax/mcp-gateway",
+    "version": "0.1.0",
+    "description": "doax MCP Gateway: a standing per-registry webapp that serves the registry's catalog over MCP-over-HTTP, as a thin front-end to the executor core.",
+    "license": "UNLICENSED",
+    "type": "module",
+    "bin": {
+        "doax-mcp-gateway": "./dist/main.js"
+    },
+    "files": ["dist"],
+    "engines": {
+        "node": ">=24"
+    },
+    "scripts": {
+        "build": "tsc -b",
+        "dev": "node --conditions=@doax/source src/main.ts",
+        "start": "node dist/main.js"
+    },
+    "dependencies": {
+        "@doax/config": "workspace:*",
+        "@doax/protocol": "workspace:*",
+        "doax-cli": "workspace:*"
+    },
+    "publishConfig": {
+        "access": "public"
+    }
+}

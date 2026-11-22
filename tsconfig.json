@@ -8,6 +8,7 @@
         { "path": "apps/auth-server" },
         { "path": "apps/executor-host" },
         { "path": "apps/doax-server" },
-        { "path": "apps/doax-cli" }
+        { "path": "apps/doax-cli" },
+        { "path": "apps/mcp-gateway" }
     ]
 }

@@ -124,6 +124,18 @@ importers:
         specifier: ^4.12.0
         version: 4.13.12
 
+  apps/mcp-gateway:
+    dependencies:
+      '@doax/config':
+        specifier: workspace:*
+        version: link:../../packages/config
+      '@doax/protocol':
+        specifier: workspace:*
+        version: link:../../packages/protocol
+      doax-cli:
+        specifier: workspace:*
+        version: link:../doax-cli
+
   apps/registry-server:
     dependencies:
       '@doax/config':

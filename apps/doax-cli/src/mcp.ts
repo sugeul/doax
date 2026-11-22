@@ -17,7 +17,7 @@ import { type CliDeps, type CliResult, run, VERSION } from "./cli.ts";
 
 const PROTOCOL_VERSION = "2025-06-18";
 
-interface Mode {
+export interface Mode {
     single: boolean;
     /** single-resource mode: the canonical ref, its kind, and its namespace/name. */
     ref?: string;
@@ -26,7 +26,7 @@ interface Mode {
     name?: string;
 }
 
-interface JsonRpcMessage {
+export interface JsonRpcMessage {
     jsonrpc?: string;
     id?: string | number | null;
     method?: string;
@@ -236,7 +236,7 @@ async function readResource(deps: CliDeps, uri: string) {
 
 /* ---------- JSON-RPC over stdio ---------- */
 
-async function handle(deps: CliDeps, mode: Mode, msg: JsonRpcMessage): Promise<unknown> {
+export async function handle(deps: CliDeps, mode: Mode, msg: JsonRpcMessage): Promise<unknown> {
     switch (msg.method) {
         case "initialize":
             return {
@@ -268,24 +268,27 @@ async function handle(deps: CliDeps, mode: Mode, msg: JsonRpcMessage): Promise<u
 }
 
 /** Serve MCP over stdin/stdout until stdin closes. `rest` is the `doax mcp` tail; a lone ref selects single-resource mode. */
-export async function serveMcp(rest: string[], deps: CliDeps): Promise<void> {
+/** Build the server Mode from the `doax mcp` tail: a lone ref selects single-resource mode, else gateway. */
+export async function resolveMode(rest: string[], deps: CliDeps): Promise<Mode> {
     const refArg = rest.find((arg) => !arg.startsWith("-"));
-    let mode: Mode = { single: false };
-    if (refArg) {
-        const parsed = parseResourceRef(refArg); // throws on a malformed ref, before we start the loop
-        const resolved = await run(["resolve", refArg, "--json"], deps);
-        let kind = "unknown";
-        if (resolved.exitCode === 0 && resolved.stdout) {
-            try {
-                kind = (JSON.parse(resolved.stdout) as { kind?: string }).kind ?? "unknown";
-            } catch {
-                /* resolve printed something unexpected; describe still works */
-            }
-        } else {
-            process.stderr.write(`doax mcp: could not resolve ${refArg}: ${resolved.stderr ?? "unknown error"}\n`);
+    if (!refArg) return { single: false };
+    const parsed = parseResourceRef(refArg); // throws on a malformed ref, before we start the loop
+    const resolved = await run(["resolve", refArg, "--json"], deps);
+    let kind = "unknown";
+    if (resolved.exitCode === 0 && resolved.stdout) {
+        try {
+            kind = (JSON.parse(resolved.stdout) as { kind?: string }).kind ?? "unknown";
+        } catch {
+            /* resolve printed something unexpected; describe still works */
         }
-        mode = { single: true, ref: formatResourceRef(parsed), kind, namespace: parsed.namespace, name: parsed.name };
+    } else {
+        process.stderr.write(`doax mcp: could not resolve ${refArg}: ${resolved.stderr ?? "unknown error"}\n`);
     }
+    return { single: true, ref: formatResourceRef(parsed), kind, namespace: parsed.namespace, name: parsed.name };
+}
+
+export async function serveMcp(rest: string[], deps: CliDeps): Promise<void> {
+    const mode = await resolveMode(rest, deps);
 
     const write = (msg: unknown) => process.stdout.write(`${JSON.stringify(msg)}\n`);
     const rl = createInterface({ input: process.stdin });
@@ -316,4 +319,5 @@ export async function serveMcp(rest: string[], deps: CliDeps): Promise<void> {
     await queue;
 }
 
-export type { CliResult };
+export { run } from "./cli.ts";
+export type { CliDeps, CliResult };
