@@ -1,20 +1,18 @@
-import { bearer, handleRpc, type JsonRpcMessage, rpcError } from "./gateway.ts";
+import { bearer, handleRpc, type JsonRpcMessage, parseCookies, rpcError, setCookieHeader } from "./gateway.ts";
 
 /**
  * API Gateway HTTP API (payload v2.0) handler for mcp.doax.io. The gateway is a stateless proxy to the
- * registry, so unlike the registry Lambda it needs no VPC: it reaches registry.doax.io over the internet
- * and forwards the caller's bearer. One POST carries one JSON-RPC message; the response carries one back.
+ * registry, so unlike the registry Lambda it needs no VPC. One POST carries one JSON-RPC message; incoming
+ * cookies carry the caller's minted tokens, and the response's `cookies` carry back any mints (Set-Cookie).
  */
 
 interface ApiEvent {
     requestContext?: { http?: { method?: string } };
     headers?: Record<string, string | undefined>;
+    cookies?: string[];
     body?: string;
     isBase64Encoded?: boolean;
 }
-
-const JSON_RESPONSE = { statusCode: 200, headers: { "content-type": "application/json" } };
-const json = (statusCode: number, value: unknown) => ({ statusCode, headers: { "content-type": "application/json" }, body: JSON.stringify(value) });
 
 export async function handler(event: ApiEvent) {
     const method = event.requestContext?.http?.method;
@@ -26,18 +24,20 @@ export async function handler(event: ApiEvent) {
     try {
         msg = JSON.parse(raw) as JsonRpcMessage;
     } catch {
-        return json(400, rpcError(null, -32700, "parse error"));
+        return { statusCode: 400, headers: { "content-type": "application/json" }, body: JSON.stringify(rpcError(null, -32700, "parse error")) };
     }
 
     const token = bearer(event.headers?.authorization ?? event.headers?.Authorization);
+    const cookies = parseCookies((event.cookies ?? []).join("; "));
     const isRequest = msg.id !== undefined && msg.id !== null;
     try {
-        const result = await handleRpc(token, msg);
-        if (!isRequest) return { statusCode: 202, body: "" };
-        return { ...JSON_RESPONSE, body: JSON.stringify({ jsonrpc: "2.0", id: msg.id, result }) };
+        const { result, setCookies } = await handleRpc({ token, cookies }, msg);
+        const out = setCookies.map(setCookieHeader);
+        if (!isRequest) return { statusCode: 202, cookies: out, body: "" };
+        return { statusCode: 200, headers: { "content-type": "application/json" }, cookies: out, body: JSON.stringify({ jsonrpc: "2.0", id: msg.id, result }) };
     } catch (err) {
         const e = err as { code?: number; message?: string };
         if (!isRequest) return { statusCode: 202, body: "" };
-        return json(200, rpcError(msg.id, e.code ?? -32603, e.message ?? String(err)));
+        return { statusCode: 200, headers: { "content-type": "application/json" }, body: JSON.stringify(rpcError(msg.id, e.code ?? -32603, e.message ?? String(err))) };
     }
 }

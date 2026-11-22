@@ -1,25 +1,45 @@
-import { createHash, createHmac, timingSafeEqual } from "node:crypto";
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadCliConfig } from "@doax/config";
+import { parseResourceRef } from "@doax/protocol";
 import { type CliDeps, handle, type JsonRpcMessage, type Mode, run } from "doax-cli/mcp";
 
 /**
- * doax MCP Gateway core — transport-independent. The HTTP server (main.ts) and the Lambda handler
- * (lambda.ts) both call handleRpc(). It reuses the executor core through the same handle() the stdio
- * `doax mcp` uses; the additions are a per-request caller identity (the bearer is forwarded to the
- * registry; nothing is held server-side) and the two-step human-in-the-loop for effecting work.
+ * doax MCP Gateway core — transport-independent (main.ts = HTTP, lambda.ts = API Gateway). It reuses the
+ * executor core through the same handle() the stdio `doax mcp` uses, and adds the web-side credential model:
+ * the caller's cookie is the credential store — each authenticator's minted token lives under its own cookie
+ * key (doax_tok_<@ns/name>), the web equivalent of ~/.doax/credentials.json. A token is minted by invoking
+ * the authenticator (the secret surfaces its declared interaction) and cached in the cookie; there is no
+ * server-side store and no central verifier. Credentials are per-request isolated; only the package cache is shared.
  */
 
 export const REGISTRY = (process.env.DOAX_REGISTRY ?? "https://registry.doax.io").replace(/\/+$/, "");
-// Ephemeral home: the digest package cache is fine to share, but there is no credentials.json — so a
-// credential-needing read hands back the guarded command instead of running under a server-side secret.
-const HOME = mkdtempSync(join(tmpdir(), "doax-mcp-gateway-"));
 const MODE: Mode = { single: false };
+const COOKIE_PREFIX = "doax_tok_";
+
+// Content-addressed package cache, safe to share across callers; credentials never are.
+const CACHE = join(tmpdir(), "doax-mcp-cache");
+mkdirSync(CACHE, { recursive: true });
+
+export interface SetCookie {
+    name: string;
+    value: string;
+}
+
+/** A per-request home: this caller's credentials.json (from their cookie) plus the shared package cache. */
+function freshHome(): string {
+    const home = mkdtempSync(join(tmpdir(), "doax-mcp-"));
+    try {
+        symlinkSync(CACHE, join(home, "cache"), "dir");
+    } catch {
+        /* no symlink here — the cache just repopulates in-home */
+    }
+    return home;
+}
 
 /** Per-request identity: forward the caller's bearer to the registry; the gateway holds nothing. */
-function depsFor(token: string | undefined): CliDeps {
+function depsFor(token: string | undefined, home: string): CliDeps {
     const fetchAsCaller: typeof fetch = (input, init) => {
         const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
         if (!token || !url.startsWith(REGISTRY)) return globalThis.fetch(input, init);
@@ -27,111 +47,137 @@ function depsFor(token: string | undefined): CliDeps {
         if (!headers.has("authorization")) headers.set("authorization", `Bearer ${token}`);
         return globalThis.fetch(input, { ...init, headers });
     };
-    return { config: loadCliConfig({ DOAX_REGISTRY: REGISTRY }), fetch: fetchAsCaller, home: HOME, prompt: undefined };
+    return { config: loadCliConfig({ DOAX_REGISTRY: REGISTRY }), fetch: fetchAsCaller, home, prompt: undefined };
 }
 
-function paramArgs(params: unknown): string[] {
-    if (!params || typeof params !== "object") return [];
-    return Object.entries(params as Record<string, unknown>).flatMap(([k, v]) => ["--param", `${k}=${typeof v === "string" ? v : JSON.stringify(v)}`]);
-}
-const asText = (value: string, isError = false) => ({ content: [{ type: "text", text: value }], isError });
-const safeJson = (s: string): unknown => {
-    try {
-        return JSON.parse(s);
-    } catch {
-        return s;
+/* cookie <-> credential store */
+
+function cookiesToCreds(home: string, cookies: Record<string, string>): void {
+    const creds: Record<string, unknown> = {};
+    for (const [name, value] of Object.entries(cookies)) {
+        if (!name.startsWith(COOKIE_PREFIX)) continue;
+        try {
+            const entry = JSON.parse(Buffer.from(value, "base64url").toString()) as { authenticator: string };
+            const ref = parseResourceRef(entry.authenticator);
+            creds[`@${ref.namespace}/${ref.name}`] = entry;
+        } catch {
+            /* a malformed cookie is simply an absent credential */
+        }
     }
+    if (Object.keys(creds).length) writeFileSync(join(home, "credentials.json"), JSON.stringify(creds));
+}
+
+function credsToCookies(home: string): SetCookie[] {
+    let creds: Record<string, { authenticator: string }> = {};
+    try {
+        creds = JSON.parse(readFileSync(join(home, "credentials.json"), "utf8")) as typeof creds;
+    } catch {
+        return [];
+    }
+    return Object.entries(creds).map(([key, entry]) => ({
+        name: COOKIE_PREFIX + key.replace(/[^a-zA-Z0-9]/g, "_"),
+        value: Buffer.from(JSON.stringify(entry)).toString("base64url"),
+    }));
+}
+
+/* tools: discovery via handle(); read/execute owned here so the mint secret and cookie threading apply */
+
+const paramArgs = (params: unknown): string[] =>
+    !params || typeof params !== "object"
+        ? []
+        : Object.entries(params as Record<string, unknown>).flatMap(([k, v]) => ["--param", `${k}=${typeof v === "string" ? v : JSON.stringify(v)}`]);
+const asText = (value: string, isError = false) => ({ content: [{ type: "text", text: value }], isError });
+
+const SECRET_PROP = { secret: { type: "string", description: "mint the authenticator's token on first use; cached in the cookie afterward" } };
+const READ_TOOL = {
+    name: "doax_read",
+    description: "Read a data-source. Needs the authenticator's token; the gateway caches the minted token in your cookie. Pass `secret` to mint on first use.",
+    inputSchema: { type: "object", properties: { ref: { type: "string" }, params: { type: "object" }, metadata: { type: "boolean" }, ...SECRET_PROP }, required: ["ref"] },
 };
-
-/* two-step human-in-the-loop for effecting work (architecture §3.2; approval, spec §6.4) */
-
 const DRY_RUN_TOOL = {
     name: "doax_dry_run",
-    description: "Preview an action with no side effects (its native/predictive dry-run). The safe first step of the two-step human-in-the-loop.",
-    inputSchema: { type: "object", properties: { ref: { type: "string" }, params: { type: "object" } }, required: ["ref"] },
+    description: "Preview an action with no side effects.",
+    inputSchema: { type: "object", properties: { ref: { type: "string" }, params: { type: "object" }, ...SECRET_PROP }, required: ["ref"] },
 };
 const EXECUTE_TOOL = {
     name: "doax_execute",
-    description:
-        "Run an action — gated behind human approval (spec §6.4). Without `approval` it returns the dry-run preview and a binding to approve; re-call with a token an approver minted after a human consented. The approver channel is pluggable; no channel is baked in.",
-    inputSchema: { type: "object", properties: { ref: { type: "string" }, params: { type: "object" }, approval: { type: "string" } }, required: ["ref"] },
+    description: "Run an action. A Tier 1/2 action needs human authorization (itself a minted token); without it the call returns the guarded next step, never a silent effect.",
+    inputSchema: { type: "object", properties: { ref: { type: "string" }, params: { type: "object" }, ...SECRET_PROP }, required: ["ref"] },
 };
 
-async function dryRun(deps: CliDeps, ref: string, params: unknown): Promise<string> {
-    const r = await run(["execute", ref, ...paramArgs(params), "--dry-run", "--json", "--no-input"], deps);
-    return r.exitCode === 0 ? (r.stdout ?? "{}") : (r.stderr ?? "dry-run failed");
-}
+const argStrings = (args: Record<string, unknown>): string[] => [...paramArgs(args.params), ...(typeof args.secret === "string" ? ["--secret", args.secret] : [])];
 
-/* approval pattern (spec §6.4, channel §14 deferred): the gateway verifies a token bound to this exact
-   invocation and signed by a trusted approver (DOAX_APPROVAL_KEY). Any channel — hosted page, messenger,
-   chat surface — that gets human consent and signs the binding is an approver; the gateway stays agnostic. */
-
-const APPROVAL_KEY = process.env.DOAX_APPROVAL_KEY;
-
-/** What an approval is bound to: this caller's exact invocation (ref + params). */
-function binding(ref: string, params: unknown): string {
-    return createHash("sha256").update(JSON.stringify({ ref, params: params ?? {} })).digest("base64url");
-}
-
-/** A token is `<payload>.<sig>`, payload = base64url(JSON {b, exp}), sig = HMAC-SHA256(key, payload). */
-function approved(token: string, bound: string): boolean {
-    if (!APPROVAL_KEY) return false;
-    const dot = token.lastIndexOf(".");
-    if (dot < 1) return false;
-    const payloadB64 = token.slice(0, dot);
-    const want = Buffer.from(createHmac("sha256", APPROVAL_KEY).update(payloadB64).digest("base64url"));
-    const got = Buffer.from(token.slice(dot + 1));
-    if (want.length !== got.length || !timingSafeEqual(want, got)) return false;
+/** A fault the caller resolves by minting/approving (not an error) becomes a `needs_mint` directive. */
+function handbackOrError(stderr: string | undefined) {
+    let d: Record<string, unknown> = {};
     try {
-        const p = JSON.parse(Buffer.from(payloadB64, "base64url").toString()) as { b?: string; exp?: number };
-        return p.b === bound && typeof p.exp === "number" && p.exp > Date.now() / 1000;
+        d = JSON.parse(stderr ?? "{}") as Record<string, unknown>;
     } catch {
-        return false;
+        /* non-JSON stderr falls through to a plain error */
     }
+    const fault = d.faultClass as string | undefined;
+    if (fault === "credential-missing" || fault === "authorization-required" || fault === "authorization-declined") {
+        return asText(JSON.stringify({ status: "needs_mint", faultClass: fault, interactionDetails: d.interactionDetails ?? null, fix: d.fix ?? null }, null, 2));
+    }
+    return asText(typeof d.error === "string" ? d.error : (stderr ?? "failed"), true);
 }
 
-async function executeStep(deps: CliDeps, args: Record<string, unknown>) {
-    const ref = String(args.ref ?? "");
-    const bound = binding(ref, args.params);
-    if (args.approval && approved(String(args.approval), bound)) {
-        // The approval is the human's authorization; run for real (--yes records it, no interactive confirm).
-        const r = await run(["execute", ref, ...paramArgs(args.params), "--yes", "--json", "--no-input"], deps);
-        return r.exitCode === 0 ? asText(r.stdout ?? "{}") : asText(r.stderr ?? "execute failed", true);
-    }
-    const preview = await dryRun(deps, ref, args.params);
-    return asText(
-        JSON.stringify(
-            { status: "approval_required", binding: bound, preview: safeJson(preview), howto: "An approver signs {\"b\":<binding>,\"exp\":<unix>} after a human consents; re-call with the token. No approver until DOAX_APPROVAL_KEY is set." },
-            null,
-            2,
-        ),
-    );
+async function readTool(deps: CliDeps, args: Record<string, unknown>) {
+    const extra = [...argStrings(args), ...(args.metadata ? ["--metadata"] : [])];
+    const r = await run(["read", String(args.ref ?? ""), ...extra, "--json", "--no-input"], deps);
+    return r.exitCode === 0 ? asText(r.stdout ?? "") : handbackOrError(r.stderr);
 }
 
-/** Reuse handle() for everything but the two-step tools. */
+async function executeTool(deps: CliDeps, args: Record<string, unknown>, dryRun: boolean) {
+    const extra = [...argStrings(args), ...(dryRun ? ["--dry-run"] : [])];
+    const r = await run(["execute", String(args.ref ?? ""), ...extra, "--json", "--no-input"], deps);
+    return r.exitCode === 0 ? asText(r.stdout ?? "") : handbackOrError(r.stderr);
+}
+
 async function route(deps: CliDeps, msg: JsonRpcMessage): Promise<unknown> {
     if (msg.method === "tools/list") {
         const base = (await handle(deps, MODE, msg)) as { tools: { name: string }[] };
-        return { tools: [...base.tools.filter((t) => t.name !== "doax_execute"), DRY_RUN_TOOL, EXECUTE_TOOL] };
+        const discovery = base.tools.filter((t) => t.name === "doax_search" || t.name === "doax_describe");
+        return { tools: [...discovery, READ_TOOL, DRY_RUN_TOOL, EXECUTE_TOOL] };
     }
     if (msg.method === "tools/call") {
         const name = String(msg.params?.name);
         const args = (msg.params?.arguments as Record<string, unknown>) ?? {};
-        if (name === "doax_dry_run") return asText(await dryRun(deps, String(args.ref ?? ""), args.params));
-        if (name === "doax_execute") return await executeStep(deps, args);
+        if (name === "doax_read") return readTool(deps, args);
+        if (name === "doax_dry_run") return executeTool(deps, args, true);
+        if (name === "doax_execute") return executeTool(deps, args, false);
     }
-    return await handle(deps, MODE, msg);
+    return handle(deps, MODE, msg);
 }
 
-/** Handle one JSON-RPC message for a caller identified by their doax bearer token (may be undefined). */
-export async function handleRpc(token: string | undefined, msg: JsonRpcMessage): Promise<unknown> {
-    return route(depsFor(token), msg);
+/** Handle one JSON-RPC message for a caller identified by their bearer and cookie-borne credentials. */
+export async function handleRpc(ctx: { token?: string; cookies: Record<string, string> }, msg: JsonRpcMessage): Promise<{ result: unknown; setCookies: SetCookie[] }> {
+    const home = freshHome();
+    try {
+        cookiesToCreds(home, ctx.cookies);
+        const result = await route(depsFor(ctx.token, home), msg);
+        return { result, setCookies: credsToCookies(home) };
+    } finally {
+        rmSync(home, { recursive: true, force: true });
+    }
 }
 
 export function bearer(header: string | undefined): string | undefined {
     const m = header ? /^Bearer\s+(.+)$/i.exec(header) : null;
     return m ? m[1] : undefined;
 }
+
+export function parseCookies(header: string | undefined): Record<string, string> {
+    const out: Record<string, string> = {};
+    for (const part of (header ?? "").split(";")) {
+        const eq = part.indexOf("=");
+        if (eq < 1) continue;
+        out[part.slice(0, eq).trim()] = part.slice(eq + 1).trim();
+    }
+    return out;
+}
+
+export const setCookieHeader = ({ name, value }: SetCookie): string => `${name}=${value}; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=86400`;
 
 export const rpcError = (id: JsonRpcMessage["id"], code: number, message: string) => ({ jsonrpc: "2.0", id: id ?? null, error: { code, message } });
 
