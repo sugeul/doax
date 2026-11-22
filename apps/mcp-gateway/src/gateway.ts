@@ -38,11 +38,20 @@ function freshHome(): string {
     return home;
 }
 
-/** Per-request identity: forward the caller's bearer to the registry; the gateway holds nothing. */
+/** True only when the URL's origin is the registry's own — not merely a string that starts with it. */
+function sameOrigin(url: string, base: string): boolean {
+    try {
+        return new URL(url).origin === new URL(base).origin;
+    } catch {
+        return false;
+    }
+}
+
+/** Per-request identity: forward the caller's bearer to the registry's own origin; the gateway holds nothing. */
 function depsFor(token: string | undefined, home: string): CliDeps {
     const fetchAsCaller: typeof fetch = (input, init) => {
         const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-        if (!token || !url.startsWith(REGISTRY)) return globalThis.fetch(input, init);
+        if (!token || !sameOrigin(url, REGISTRY)) return globalThis.fetch(input, init);
         const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
         if (!headers.has("authorization")) headers.set("authorization", `Bearer ${token}`);
         return globalThis.fetch(input, { ...init, headers });
