@@ -208,6 +208,10 @@ An Authenticator has its own required Tier (§7.3), which governs who may obtain
 
 A Resource whose target needs no authentication declares `authenticator: none`; it receives no credential material and no `auth` event is produced for it.
 
+**At most one Authenticator per namespace.** A namespace MUST contain at most one Authenticator. Every Resource in that namespace that needs authentication references that one Authenticator; the rest declare `authenticator: none`. A namespace is therefore an **authentication domain** — one target system, one sign-in — so Resources are organized by service (`@slack/*`, `@google/*`, `@fastcampus/*`) rather than aggregated under one vendor namespace. This lets an agent surface serve a whole namespace as a single connector whose one sign-in (§4.7.1a) authenticates the caller to that namespace's target, and it keeps the credential shared across the namespace's Resources (§7.6) by construction. A Resource MUST reference only its own namespace's Authenticator.
+
+When a service's standard sign-in does not fit — an organization needs a customized or more complex Authenticator (its own OAuth app, extra scopes, an internal IdP, or a multi-step flow) — it takes a distinct namespace that names both the organization and the service, for example `@customcompany-slack/*`, holding that custom Authenticator. The generic `@slack/*` and the organization-specific `@customcompany-slack/*` are then separate authentication domains, each still with its single Authenticator and its own connector. The convention keeps the one-Authenticator-per-namespace rule intact while letting an organization layer its own auth over a service without disturbing the shared one.
+
 #### 4.7.1 Authentication specification in the Authenticator's Manifest
 
 The Executor CLI cannot run an authentication flow it does not understand. Therefore every Authenticator's Manifest MUST contain an **authentication specification** that describes the flow in enough detail for the Executor CLI to carry it out and for a reviewer to assess it before use. The following items are mandatory:
