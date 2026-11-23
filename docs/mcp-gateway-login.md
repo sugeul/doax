@@ -144,6 +144,41 @@ never forward a token to a registry that did not issue it.
 - Only the first `authorization_servers` entry is used; the auth server may be on another host than
   the gateway; `resource` must equal the MCP URL exactly.
 
+## Gateway authentication is two steps: registry, then authenticator
+
+Authentication at the gateway is two steps, and they MUST NOT be conflated (spec §4.7):
+
+1. **Registry authentication** — the caller signs in to the registry (Change A, the connector's OAuth) and
+   receives a Registry token. The gateway uses it to resolve and reach the catalog.
+2. **Authenticator authentication** — the resource's namespace Authenticator issues the target credential.
+   With one Authenticator per namespace (spec §4.7), this is the namespace's single sign-in: via `poll-login`
+   (§4.7.1a) through the gateway, or — when the namespace is served as its own connector — that connector's
+   OAuth. The minted credential is cached (in the cookie, for the hosted gateway) and shared across the
+   namespace's resources.
+
+### One sign-in for both, when the authenticator auth is identical to or extends the registry auth
+
+If the namespace's Authenticator uses the **same authority** as the registry login, or **extends** it, a single
+sign-in yields what both steps need and the gateway MUST NOT make the user log in twice:
+
+- **Identical** — the target accepts the very token the registry issued (same audience, e.g. the registry
+  operator is also the target's provider). The Registry token *is* the target credential; the gateway presents
+  one token for the resolve and for the resource.
+- **Extension** — the same identity provider grants the target's scopes within the same authorization; one
+  sign-in returns a token (or an audience/scope-expanded token) covering both. The caller authenticates once;
+  the gateway uses the registry portion to resolve and hands the target portion to the resource.
+
+So when the registry and the namespace share an authority, wire the single sign-in to issue the combined token
+and skip the authenticator's separate flow.
+
+### When they differ, keep the two steps separate
+
+If the target is a **different authority** — a different organization, or a provider that refuses the registry's
+audience (spec §7.2) — one sign-in cannot cover both. The registry login and the namespace sign-in are two
+authentications producing two tokens for two audiences, **even if they share an identity provider**: the same
+Google SSO does not make the tokens interchangeable. The namespace then signs in on its own — its connector's
+OAuth, or `poll-login` — and the gateway keeps the registry token and the target credential distinct.
+
 ## Closed (were open in 305d679)
 
 - Tier 2 `read`/`execute` over the gateway now completes: the gateway cookies `auth-tokens.json`
