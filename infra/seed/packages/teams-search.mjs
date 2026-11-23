@@ -1,5 +1,5 @@
 /**
-  * @doax/teams-search — data-source (spec §5).
+  * @teams/search — data-source (spec §5).
   * One collection: Teams channel messages matching a query, via POST /search/query with
   * entityTypes ["chatMessage"]. The query interface the Registry leaves out (§5.4) is
   * supplied here by Microsoft Search. Caller-relative (§5.3): results are limited to
@@ -19,7 +19,7 @@ function graphFault(status, body, retryAfter) {
                 detail: {
                     neededScope: null,
                     graphMessage: message || null,
-                    fix: "grant the delegated permission at https://portal.azure.com → Entra ID → App registrations → your app → API permissions (admin-consent if required), then re-authenticate (doax auth set @doax/teams-login)",
+                    fix: "grant the delegated permission at https://portal.azure.com → Entra ID → App registrations → your app → API permissions (admin-consent if required), then re-authenticate (doax auth set @teams/login)",
                 },
             });
         }
@@ -34,7 +34,7 @@ function graphFault(status, body, retryAfter) {
         return Object.assign(new Error(`not-found: ${code ?? "team or channel id not found"}`), {
             faultClass: "not-found",
             graphError: code,
-            detail: { fix: "check the team and channel ids (@doax/teams-list-team, @doax/teams-list-channel)" },
+            detail: { fix: "check the team and channel ids (@teams/list-team, @teams/list-channel)" },
         });
     }
     if (status >= 500) return Object.assign(new Error(`graph-unavailable: HTTP ${status}`), { faultClass: "graph-unavailable" });
@@ -73,7 +73,7 @@ const RECORD_SCHEMA = {
 
 export function describe() {
     return {
-        identity: "@doax/teams-search",
+        identity: "@teams/search",
         kind: "data-source",
         collection: "Teams channel messages matching a query, visible to the caller",
         readParams: { query: "search query (required)", limit: "max records per page, default 20", from: "offset for the next page, default 0" },

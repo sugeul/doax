@@ -1,5 +1,5 @@
 /**
-  * @doax/slack-channel-history — data-source (spec §5).
+  * @slack/channel-history — data-source (spec §5).
   * One collection: the Slack messages visible to the caller's token, retrieved per channel.
   * The source decides what the caller sees (§5.1): Slack returns only what the token may read.
   */
@@ -18,7 +18,7 @@ async function slack(method, token, params = {}) {
                 detail: {
                     neededScope: body.needed ?? null,
                     providedScopes: body.provided ?? null,
-                    fix: "add the scope at https://api.slack.com/apps → your app → OAuth & Permissions → Bot Token Scopes, reinstall the app, then retry (doax auth set @doax/slack-login --secret ... if the token rotated)",
+                    fix: "add the scope at https://api.slack.com/apps → your app → OAuth & Permissions → Bot Token Scopes, reinstall the app, then retry (doax auth set @slack/login --secret ... if the token rotated)",
                 },
             });
         }
@@ -44,7 +44,7 @@ const RECORD_SCHEMA = {
 
 export function describe() {
     return {
-        identity: "@doax/slack-channel-history",
+        identity: "@slack/channel-history",
         kind: "data-source",
         collection: "slack messages visible to the caller, per channel",
         readParams: { channel: "channel id (required)", limit: "max records, default 20", oldest: "ts lower bound" },

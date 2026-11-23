@@ -1,7 +1,7 @@
 /**
-  * @doax/google-drive-get — data-source (spec §5).
+  * @gdrive/get — data-source (spec §5).
   * One collection of one record: the metadata of a single Drive file, via GET /drive/v3/files/{fileId}.
-  * The `fileId` comes from @doax/google-drive-list (its `id`) or @doax/google-drive-changes
+  * The `fileId` comes from @gdrive/list (its `id`) or @gdrive/changes
   * (its `fileId`). Caller-relative (§5.3): resolves only if the token may see the file.
   */
 
@@ -35,13 +35,13 @@ function driveFault(status, body, retryAfter) {
         if (reason === "insufficientPermissions" || /insufficient.*scope/i.test(message)) {
             return Object.assign(new Error("missing-scope: the token lacks the Drive scope this operation needs"), {
                 faultClass: "missing-scope",
-                detail: { neededScope: "https://www.googleapis.com/auth/drive.readonly", driveMessage: message || null, fix: "re-consent at https://auth.doax.io?appid=@doax/google-drive-login, then re-authenticate (doax auth set @doax/google-drive-login)" },
+                detail: { neededScope: "https://www.googleapis.com/auth/drive.readonly", driveMessage: message || null, fix: "re-consent at https://auth.doax.io?appid=@gdrive/login, then re-authenticate (doax auth set @gdrive/login)" },
             });
         }
         return Object.assign(new Error(`access-denied: ${reason ?? "forbidden"}`), { faultClass: "access-denied", driveError: reason });
     }
     if (status === 429) return Object.assign(new Error("rate-limited: Google Drive throttled the request"), { faultClass: "rate-limited", retryAfter: retryAfter ?? null });
-    if (status === 404) return Object.assign(new Error(`not-found: ${reason ?? "file id not found or not visible to this caller"}`), { faultClass: "not-found", driveError: reason, detail: { fix: "check the fileId (@doax/google-drive-list) and that the token may see it" } });
+    if (status === 404) return Object.assign(new Error(`not-found: ${reason ?? "file id not found or not visible to this caller"}`), { faultClass: "not-found", driveError: reason, detail: { fix: "check the fileId (@gdrive/list) and that the token may see it" } });
     if (status >= 500) return Object.assign(new Error(`drive-unavailable: HTTP ${status}`), { faultClass: "drive-unavailable" });
     return Object.assign(new Error(`drive-error: ${reason ?? status}`), { faultClass: "drive-error", driveError: reason });
 }
@@ -113,7 +113,7 @@ const RECORD_SCHEMA = {
 
 export function describe() {
     return {
-        identity: "@doax/google-drive-get",
+        identity: "@gdrive/get",
         kind: "data-source",
         collection: "the metadata of a single Drive file",
         readParams: {

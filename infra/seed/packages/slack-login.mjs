@@ -1,5 +1,5 @@
 /**
-  * @doax/slack-login — authenticator for the Slack Web API (spec §4.7).
+  * @slack/login — authenticator for the Slack Web API (spec §4.7).
   * Subject: personal. Interaction: secret-entry (a Slack user or bot token).
   * The Executor CLI collects the secret and passes it as input; this module never stores it.
   */
@@ -21,7 +21,7 @@ async function slack(method, token, params = {}) {
                 detail: {
                     neededScope: body.needed ?? null,
                     providedScopes: body.provided ?? null,
-                    fix: "add the scope at https://api.slack.com/apps → your app → OAuth & Permissions → Bot Token Scopes, reinstall the app, then retry (doax auth set @doax/slack-login --secret ... if the token rotated)",
+                    fix: "add the scope at https://api.slack.com/apps → your app → OAuth & Permissions → Bot Token Scopes, reinstall the app, then retry (doax auth set @slack/login --secret ... if the token rotated)",
                 },
             });
         }
@@ -34,7 +34,7 @@ async function slack(method, token, params = {}) {
 
 export function describe() {
     return {
-        identity: "@doax/slack-login",
+        identity: "@slack/login",
         kind: "authenticator",
         subject: "personal",
         interaction: "secret-entry",

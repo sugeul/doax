@@ -18,11 +18,11 @@ if (!bearer && !admin) {
 }
 
 const OWNER = "doax.io operators <registry@doax.io>";
-const AUTHENTICATOR = "@doax/slack-login@1.0.0";
-const TEAMS_AUTHENTICATOR = "@doax/teams-login@1.0.0";
-const DRIVE_AUTHENTICATOR = "@doax/google-drive-login@1.0.0";
-const ONEDRIVE_AUTHENTICATOR = "@doax/onedrive-login@1.0.0";
-const GMAIL_AUTHENTICATOR = "@doax/gmail-login@1.0.0";
+const AUTHENTICATOR = "@slack/login@1.0.0";
+const TEAMS_AUTHENTICATOR = "@teams/login@1.0.0";
+const DRIVE_AUTHENTICATOR = "@gdrive/login@1.0.0";
+const ONEDRIVE_AUTHENTICATOR = "@onedrive/login@1.0.0";
+const GMAIL_AUTHENTICATOR = "@gmail/login@1.0.0";
 
 const slackFaults = (extra = []) => [
     {
@@ -38,7 +38,7 @@ const slackFaults = (extra = []) => [
         trigger: "token expired, revoked, or wrong",
         callerVisibleEffect: "operation fails, no side effect",
         expectedFrequency: "unknown",
-        recommendedCallerAction: "re-authenticate (doax auth set @doax/slack-login)",
+        recommendedCallerAction: "re-authenticate (doax auth set @slack/login)",
     },
     {
         faultClass: "slack-unavailable",
@@ -72,14 +72,14 @@ const graphFaults = (extra = []) => [
         callerVisibleEffect: "operation fails, no side effect; the error points to the app's API permissions",
         expectedFrequency: "setup-time; once permissions are consented it stops",
         recommendedCallerAction:
-            "grant the delegated permission in Entra ID (App registrations > API permissions), admin-consent if required, then re-authenticate (doax auth set @doax/teams-login)",
+            "grant the delegated permission in Entra ID (App registrations > API permissions), admin-consent if required, then re-authenticate (doax auth set @teams/login)",
     },
     {
         faultClass: "invalid-auth",
         trigger: "access token expired or revoked and the refresh token no longer works",
         callerVisibleEffect: "operation fails, no side effect",
         expectedFrequency: "access tokens expire ~hourly; normally refreshed silently",
-        recommendedCallerAction: "re-authenticate (doax auth set @doax/teams-login)",
+        recommendedCallerAction: "re-authenticate (doax auth set @teams/login)",
     },
     {
         faultClass: "graph-unavailable",
@@ -103,7 +103,7 @@ const teamsNotFound = {
     trigger: "team or channel id wrong, or the signed-in user is not a member",
     callerVisibleEffect: "operation fails, no side effect",
     expectedFrequency: "caller error",
-    recommendedCallerAction: "check the ids via @doax/teams-list-team and @doax/teams-list-channel",
+    recommendedCallerAction: "check the ids via @teams/list-team and @teams/list-channel",
 };
 
 const teamsAccessDenied = {
@@ -120,14 +120,14 @@ const driveFaults = (extra = []) => [
         trigger: "the refresh token lacks the Drive OAuth scope the operation needs (drive.readonly)",
         callerVisibleEffect: "operation fails, no side effect; the error names the needed scope",
         expectedFrequency: "setup-time; once the token carries drive.readonly it stops",
-        recommendedCallerAction: "re-consent at https://auth.doax.io so the token carries drive.readonly, then re-authenticate (doax auth set @doax/google-drive-login --secret <refresh-token>)",
+        recommendedCallerAction: "re-consent at https://auth.doax.io so the token carries drive.readonly, then re-authenticate (doax auth set @gdrive/login --secret <refresh-token>)",
     },
     {
         faultClass: "invalid-auth",
         trigger: "the access token expired, or the refresh token was revoked/expired and cannot be refreshed",
         callerVisibleEffect: "operation fails, no side effect",
         expectedFrequency: "access tokens expire ~hourly; normally refreshed silently from the stored refresh token",
-        recommendedCallerAction: "re-mint a refresh token at https://auth.doax.io and re-authenticate (doax auth set @doax/google-drive-login)",
+        recommendedCallerAction: "re-mint a refresh token at https://auth.doax.io and re-authenticate (doax auth set @gdrive/login)",
     },
     {
         faultClass: "access-denied",
@@ -158,7 +158,7 @@ const driveNotFound = {
     trigger: "the file id or page token is wrong, or the token cannot see the resource",
     callerVisibleEffect: "operation fails, no side effect",
     expectedFrequency: "caller error",
-    recommendedCallerAction: "check the id via @doax/google-drive-list; for changes, read with no cursor to get a fresh baseline token",
+    recommendedCallerAction: "check the id via @gdrive/list; for changes, read with no cursor to get a fresh baseline token",
 };
 
 const driveContentTooLarge = {
@@ -175,14 +175,14 @@ const googleFaults = (extra = []) => [
         trigger: "the refresh token lacks an OAuth scope the operation needs",
         callerVisibleEffect: "operation fails, no side effect; the error names the needed scope",
         expectedFrequency: "setup-time; once the token carries the scope it stops",
-        recommendedCallerAction: "re-consent at https://auth.doax.io?appid=@doax/gmail-login, then re-authenticate (doax auth set @doax/gmail-login --secret <refresh-token>)",
+        recommendedCallerAction: "re-consent at https://auth.doax.io?appid=@gmail/login, then re-authenticate (doax auth set @gmail/login --secret <refresh-token>)",
     },
     {
         faultClass: "invalid-auth",
         trigger: "the access token expired, or the refresh token was revoked/expired",
         callerVisibleEffect: "operation fails, no side effect",
         expectedFrequency: "access tokens expire ~hourly; normally refreshed silently",
-        recommendedCallerAction: "re-mint a refresh token at https://auth.doax.io?appid=@doax/gmail-login and re-authenticate",
+        recommendedCallerAction: "re-mint a refresh token at https://auth.doax.io?appid=@gmail/login and re-authenticate",
     },
     {
         faultClass: "access-denied",
@@ -221,7 +221,7 @@ const onedriveNotFound = {
     trigger: "the item id, drive id, or delta token is wrong, expired, or not visible to the caller",
     callerVisibleEffect: "operation fails, no side effect",
     expectedFrequency: "caller error / expired delta token",
-    recommendedCallerAction: "check the id via @doax/onedrive-list; for changes, read with no cursor to resync a fresh baseline",
+    recommendedCallerAction: "check the id via @onedrive/list; for changes, read with no cursor to resync a fresh baseline",
 };
 
 const RESOURCES = [
@@ -270,7 +270,7 @@ const RESOURCES = [
         },
     },
     {
-        identity: "@doax/slack-channel-history@1.0.0",
+        identity: "@slack/channel-history@1.0.0",
         file: "slack-channel-history.mjs",
         manifest: {
             kind: "data-source",
@@ -299,7 +299,7 @@ const RESOURCES = [
         },
     },
     {
-        identity: "@doax/slack-list-channel@1.0.0",
+        identity: "@slack/list-channel@1.0.0",
         file: "slack-list-channel.mjs",
         manifest: {
             kind: "data-source",
@@ -328,7 +328,7 @@ const RESOURCES = [
         },
     },
     {
-        identity: "@doax/slack-post@1.0.0",
+        identity: "@slack/post@1.0.0",
         file: "slack-post.mjs",
         manifest: {
             kind: "action",
@@ -369,7 +369,7 @@ const RESOURCES = [
         },
     },
     {
-        identity: "@doax/slack-search@1.0.0",
+        identity: "@slack/search@1.0.0",
         file: "slack-search.mjs",
         manifest: {
             kind: "data-source",
@@ -450,7 +450,7 @@ const RESOURCES = [
         },
     },
     {
-        identity: "@doax/teams-list-team@1.0.0",
+        identity: "@teams/list-team@1.0.0",
         file: "teams-list-team.mjs",
         manifest: {
             kind: "data-source",
@@ -479,7 +479,7 @@ const RESOURCES = [
         },
     },
     {
-        identity: "@doax/teams-list-channel@1.0.0",
+        identity: "@teams/list-channel@1.0.0",
         file: "teams-list-channel.mjs",
         manifest: {
             kind: "data-source",
@@ -508,7 +508,7 @@ const RESOURCES = [
         },
     },
     {
-        identity: "@doax/teams-channel-messages@1.0.0",
+        identity: "@teams/channel-messages@1.0.0",
         file: "teams-channel-messages.mjs",
         manifest: {
             kind: "data-source",
@@ -537,7 +537,7 @@ const RESOURCES = [
         },
     },
     {
-        identity: "@doax/teams-post@1.0.0",
+        identity: "@teams/post@1.0.0",
         file: "teams-post.mjs",
         manifest: {
             kind: "action",
@@ -569,7 +569,7 @@ const RESOURCES = [
         },
     },
     {
-        identity: "@doax/teams-search@1.0.0",
+        identity: "@teams/search@1.0.0",
         file: "teams-search.mjs",
         manifest: {
             kind: "data-source",
@@ -604,7 +604,7 @@ const RESOURCES = [
             kind: "authenticator",
             summary: "Log in to Google Drive with an OAuth refresh token",
             description:
-                "Secret-entry authenticator for Google Drive. The caller mints a refresh token once at https://auth.doax.io (the consent-redirect mirror) and pastes it here; this module exchanges it for a short-lived access token using the OAuth client it reads from AWS Secrets Manager via the local aws-cli. refresh mode re-mints the access token silently (§7.6). Every @doax/google-drive-* resource references this authenticator, so one login serves them all.",
+                "Secret-entry authenticator for Google Drive. The caller mints a refresh token once at https://auth.doax.io (the consent-redirect mirror) and pastes it here; this module exchanges it for a short-lived access token using the OAuth client it reads from AWS Secrets Manager via the local aws-cli. refresh mode re-mints the access token silently (§7.6). Every @gdrive/* resource references this authenticator, so one login serves them all.",
             owner: OWNER,
             requiredTier: 3,
             executionLocation: "caller-device",
@@ -618,8 +618,8 @@ const RESOURCES = [
                 interactionKinds: ["secret-entry"],
                 interactionDetails: {
                     "secret-entry": {
-                        instruction: "paste the Google OAuth refresh token minted at https://auth.doax.io?appid=@doax/google-drive-login; it is exchanged for an access token and verified via drive/v3/about",
-                        entryPoint: "https://auth.doax.io?appid=@doax/google-drive-login — authorize the Drive app, then copy the refresh token shown",
+                        instruction: "paste the Google OAuth refresh token minted at https://auth.doax.io?appid=@gdrive/login; it is exchanged for an access token and verified via drive/v3/about",
+                        entryPoint: "https://auth.doax.io?appid=@gdrive/login — authorize the Drive app, then copy the refresh token shown",
                         docs: "https://developers.google.com/identity/protocols/oauth2/web-server#offline",
                     },
                 },
@@ -646,14 +646,14 @@ const RESOURCES = [
         },
     },
     {
-        identity: "@doax/google-drive-list@1.0.0",
+        identity: "@gdrive/list@1.0.0",
         file: "google-drive-list.mjs",
         manifest: {
             kind: "data-source",
             summary: "List the Google Drive files the caller can see",
             requiredScopes: ["https://www.googleapis.com/auth/drive.readonly"],
             description:
-                "One collection: Drive files visible to the caller's token, via GET /drive/v3/files. Read params: q (Drive query), pageSize (default 100), orderBy, driveId, corpora, includeItemsFromAllDrives (default true), fields, cursor (a nextPageToken). The natural first read — its `id` field is the `fileId` parameter of @doax/google-drive-get.",
+                "One collection: Drive files visible to the caller's token, via GET /drive/v3/files. Read params: q (Drive query), pageSize (default 100), orderBy, driveId, corpora, includeItemsFromAllDrives (default true), fields, cursor (a nextPageToken). The natural first read — its `id` field is the `fileId` parameter of @gdrive/get.",
             owner: OWNER,
             requiredTier: 3,
             executionLocation: "caller-device",
@@ -675,7 +675,7 @@ const RESOURCES = [
         },
     },
     {
-        identity: "@doax/google-drive-changes@1.0.0",
+        identity: "@gdrive/changes@1.0.0",
         file: "google-drive-changes.mjs",
         manifest: {
             kind: "data-source",
@@ -704,14 +704,14 @@ const RESOURCES = [
         },
     },
     {
-        identity: "@doax/google-drive-get@1.0.0",
+        identity: "@gdrive/get@1.0.0",
         file: "google-drive-get.mjs",
         manifest: {
             kind: "data-source",
             summary: "Read a single Google Drive file's metadata (and optionally its content)",
             requiredScopes: ["https://www.googleapis.com/auth/drive.readonly"],
             description:
-                "One collection of one record: a single Drive file, via GET /drive/v3/files/{fileId}. Read params: fileId (required), fields (optional override), media (optional — when true, also returns the bytes as base64 in `content`, <=10MB; Google-native files are exported, with exportMimeType overriding the per-type default). The fileId comes from @doax/google-drive-list (its `id`) or @doax/google-drive-changes (its `fileId`).",
+                "One collection of one record: a single Drive file, via GET /drive/v3/files/{fileId}. Read params: fileId (required), fields (optional override), media (optional — when true, also returns the bytes as base64 in `content`, <=10MB; Google-native files are exported, with exportMimeType overriding the per-type default). The fileId comes from @gdrive/list (its `id`) or @gdrive/changes (its `fileId`).",
             owner: OWNER,
             requiredTier: 3,
             executionLocation: "caller-device",
@@ -739,7 +739,7 @@ const RESOURCES = [
             kind: "authenticator",
             summary: "Log in to OneDrive (Microsoft Graph) with an OAuth refresh token",
             description:
-                "Secret-entry authenticator for OneDrive via Microsoft Graph. The caller mints a refresh token once at https://auth.doax.io?appid=@doax/onedrive-login (the consent-redirect mirror) and pastes it here; this module exchanges it for a short-lived access token using the OAuth client it reads from AWS Secrets Manager via the local aws-cli. refresh mode re-mints the access token silently (§7.6). Every @doax/onedrive-* resource references this authenticator, so one login serves them all.",
+                "Secret-entry authenticator for OneDrive via Microsoft Graph. The caller mints a refresh token once at https://auth.doax.io?appid=@onedrive/login (the consent-redirect mirror) and pastes it here; this module exchanges it for a short-lived access token using the OAuth client it reads from AWS Secrets Manager via the local aws-cli. refresh mode re-mints the access token silently (§7.6). Every @onedrive/* resource references this authenticator, so one login serves them all.",
             owner: OWNER,
             requiredTier: 3,
             executionLocation: "caller-device",
@@ -753,8 +753,8 @@ const RESOURCES = [
                 interactionKinds: ["secret-entry"],
                 interactionDetails: {
                     "secret-entry": {
-                        instruction: "paste the Microsoft OAuth refresh token minted at https://auth.doax.io?appid=@doax/onedrive-login; it is exchanged for an access token and verified via GET /me",
-                        entryPoint: "https://auth.doax.io?appid=@doax/onedrive-login — authorize the OneDrive app, then copy the refresh token shown",
+                        instruction: "paste the Microsoft OAuth refresh token minted at https://auth.doax.io?appid=@onedrive/login; it is exchanged for an access token and verified via GET /me",
+                        entryPoint: "https://auth.doax.io?appid=@onedrive/login — authorize the OneDrive app, then copy the refresh token shown",
                         docs: "https://learn.microsoft.com/graph/auth-v2-user",
                     },
                 },
@@ -762,7 +762,7 @@ const RESOURCES = [
                 lifetime: {
                     period: "access token ~60-90 min",
                     refreshable: true,
-                    refreshBehavior: "refresh mode re-exchanges the cached refresh token (Microsoft may rotate it; the newest is kept); if it is revoked or expired, a new refresh token must be minted at https://auth.doax.io?appid=@doax/onedrive-login",
+                    refreshBehavior: "refresh mode re-exchanges the cached refresh token (Microsoft may rotate it; the newest is kept); if it is revoked or expired, a new refresh token must be minted at https://auth.doax.io?appid=@onedrive/login",
                 },
                 verificationMethod: "GET /me (no side effects)",
                 stepUpBehavior: "same as initial (re-paste the refresh token)",
@@ -781,14 +781,14 @@ const RESOURCES = [
         },
     },
     {
-        identity: "@doax/onedrive-list@1.0.0",
+        identity: "@onedrive/list@1.0.0",
         file: "onedrive-list.mjs",
         manifest: {
             kind: "data-source",
             summary: "List the items in one OneDrive folder the caller can see",
             requiredScopes: ["Files.Read"],
             description:
-                "One collection: items (files and folders) in one OneDrive folder, via GET /me/drive/root/children (or /items/{id}/children). Read params: itemId (folder; omit for root), driveId (omit for the caller's own OneDrive), top (default 100), orderBy, cursor (an @odata.nextLink). A folder's `id` is the `itemId` of this resource; any item's `id` is the `itemId` of @doax/onedrive-get.",
+                "One collection: items (files and folders) in one OneDrive folder, via GET /me/drive/root/children (or /items/{id}/children). Read params: itemId (folder; omit for root), driveId (omit for the caller's own OneDrive), top (default 100), orderBy, cursor (an @odata.nextLink). A folder's `id` is the `itemId` of this resource; any item's `id` is the `itemId` of @onedrive/get.",
             owner: OWNER,
             requiredTier: 3,
             executionLocation: "caller-device",
@@ -810,7 +810,7 @@ const RESOURCES = [
         },
     },
     {
-        identity: "@doax/onedrive-changes@1.0.0",
+        identity: "@onedrive/changes@1.0.0",
         file: "onedrive-changes.mjs",
         manifest: {
             kind: "data-source",
@@ -839,14 +839,14 @@ const RESOURCES = [
         },
     },
     {
-        identity: "@doax/onedrive-get@1.0.0",
+        identity: "@onedrive/get@1.0.0",
         file: "onedrive-get.mjs",
         manifest: {
             kind: "data-source",
             summary: "Read a single OneDrive item's metadata (and optionally its content)",
             requiredScopes: ["Files.Read"],
             description:
-                "One collection of one record: a single OneDrive item, via GET /me/drive/items/{itemId}. Read params: itemId (required), driveId (omit for the caller's own OneDrive), media (optional — when true, also returns the bytes as base64 in `content`, <=10MB; not valid for folders). The itemId comes from @doax/onedrive-list (its `id`) or @doax/onedrive-changes (its `id`).",
+                "One collection of one record: a single OneDrive item, via GET /me/drive/items/{itemId}. Read params: itemId (required), driveId (omit for the caller's own OneDrive), media (optional — when true, also returns the bytes as base64 in `content`, <=10MB; not valid for folders). The itemId comes from @onedrive/list (its `id`) or @onedrive/changes (its `id`).",
             owner: OWNER,
             requiredTier: 3,
             executionLocation: "caller-device",
@@ -874,7 +874,7 @@ const RESOURCES = [
             kind: "authenticator",
             summary: "Log in to Google user APIs (Gmail, Calendar, Contacts, Tasks) with an OAuth refresh token",
             description:
-                "Shared secret-entry authenticator for the caller's Google account. The caller consents once at https://auth.doax.io?appid=@doax/gmail-login and pastes the refresh token here; this module exchanges it for an access token using the OAuth client it reads from AWS Secrets Manager (doax-adapter-gmail) via the local aws-cli. Every @doax/{gmail,calendar,contacts,tasks}-* resource references this authenticator, so one login serves them all.",
+                "Shared secret-entry authenticator for the caller's Google account. The caller consents once at https://auth.doax.io?appid=@gmail/login and pastes the refresh token here; this module exchanges it for an access token using the OAuth client it reads from AWS Secrets Manager (doax-adapter-gmail) via the local aws-cli. Every @doax/{gmail,calendar,contacts,tasks}-* resource references this authenticator, so one login serves them all.",
             owner: OWNER,
             requiredTier: 3,
             executionLocation: "caller-device",
@@ -888,8 +888,8 @@ const RESOURCES = [
                 interactionKinds: ["secret-entry"],
                 interactionDetails: {
                     "secret-entry": {
-                        instruction: "paste the Google OAuth refresh token minted at https://auth.doax.io?appid=@doax/gmail-login; it is exchanged for an access token and verified via the userinfo endpoint",
-                        entryPoint: "https://auth.doax.io?appid=@doax/gmail-login — authorize the Google app, then copy the refresh token shown",
+                        instruction: "paste the Google OAuth refresh token minted at https://auth.doax.io?appid=@gmail/login; it is exchanged for an access token and verified via the userinfo endpoint",
+                        entryPoint: "https://auth.doax.io?appid=@gmail/login — authorize the Google app, then copy the refresh token shown",
                         docs: "https://developers.google.com/identity/protocols/oauth2/web-server#offline",
                     },
                 },
@@ -897,7 +897,7 @@ const RESOURCES = [
                 lifetime: {
                     period: "access token ~60 min",
                     refreshable: true,
-                    refreshBehavior: "refresh mode re-exchanges the cached refresh token; if it is revoked or expired, a new one must be minted at https://auth.doax.io?appid=@doax/gmail-login",
+                    refreshBehavior: "refresh mode re-exchanges the cached refresh token; if it is revoked or expired, a new one must be minted at https://auth.doax.io?appid=@gmail/login",
                 },
                 verificationMethod: "GET https://www.googleapis.com/oauth2/v3/userinfo (no side effects)",
                 stepUpBehavior: "same as initial (re-paste the refresh token)",
@@ -916,20 +916,20 @@ const RESOURCES = [
         },
     },
     ...[
-        { name: "gmail-messages", file: "gmail-messages.mjs", summary: "List the caller's Gmail messages matching a query", scopes: ["https://www.googleapis.com/auth/gmail.readonly"], description: "One collection: Gmail messages matching a query, via users.messages.list, each enriched with header metadata. Read params: q, labelIds, maxResults (default 20), includeSpamTrash, cursor. An `id` is the `messageId` of @doax/gmail-get.", faults: googleFaults() },
-        { name: "gmail-get", file: "gmail-get.mjs", summary: "Read a single Gmail message", scopes: ["https://www.googleapis.com/auth/gmail.readonly"], description: "One collection of one record: a Gmail message via users.messages.get (format=full), with the plain-text/html body decoded. Read params: messageId (required), format. The messageId comes from @doax/gmail-messages.", faults: googleFaults([googleNotFound]) },
-        { name: "gmail-history", file: "gmail-history.mjs", summary: "Read the caller's Gmail change feed (delta)", scopes: ["https://www.googleapis.com/auth/gmail.readonly"], description: "One collection: the Gmail change feed via users.history.list. No cursor establishes a baseline historyId; poll with nextDeltaToken thereafter. Read params: cursor, pageToken, historyTypes, labelId. Returns continuation and nextDeltaToken.", faults: googleFaults([googleNotFound]) },
-        { name: "gmail-labels", file: "gmail-labels.mjs", summary: "List the caller's Gmail labels", scopes: ["https://www.googleapis.com/auth/gmail.readonly"], description: "One collection: the caller's Gmail labels via users.labels.list. No read params. An `id` is a value for the `labelIds` parameter of @doax/gmail-messages.", faults: googleFaults() },
-        { name: "calendar-list", file: "calendar-list.mjs", summary: "List the calendars on the caller's calendar list", scopes: ["https://www.googleapis.com/auth/calendar.readonly"], description: "One collection: the caller's calendars via calendarList.list. Read params: showHidden, cursor. An `id` is the `calendarId` of @doax/calendar-events and @doax/calendar-event-get.", faults: googleFaults() },
+        { name: "messages", file: "gmail-messages.mjs", summary: "List the caller's Gmail messages matching a query", scopes: ["https://www.googleapis.com/auth/gmail.readonly"], description: "One collection: Gmail messages matching a query, via users.messages.list, each enriched with header metadata. Read params: q, labelIds, maxResults (default 20), includeSpamTrash, cursor. An `id` is the `messageId` of @gmail/get.", faults: googleFaults() },
+        { name: "get", file: "gmail-get.mjs", summary: "Read a single Gmail message", scopes: ["https://www.googleapis.com/auth/gmail.readonly"], description: "One collection of one record: a Gmail message via users.messages.get (format=full), with the plain-text/html body decoded. Read params: messageId (required), format. The messageId comes from @gmail/messages.", faults: googleFaults([googleNotFound]) },
+        { name: "history", file: "gmail-history.mjs", summary: "Read the caller's Gmail change feed (delta)", scopes: ["https://www.googleapis.com/auth/gmail.readonly"], description: "One collection: the Gmail change feed via users.history.list. No cursor establishes a baseline historyId; poll with nextDeltaToken thereafter. Read params: cursor, pageToken, historyTypes, labelId. Returns continuation and nextDeltaToken.", faults: googleFaults([googleNotFound]) },
+        { name: "labels", file: "gmail-labels.mjs", summary: "List the caller's Gmail labels", scopes: ["https://www.googleapis.com/auth/gmail.readonly"], description: "One collection: the caller's Gmail labels via users.labels.list. No read params. An `id` is a value for the `labelIds` parameter of @gmail/messages.", faults: googleFaults() },
+        { name: "calendar-list", file: "calendar-list.mjs", summary: "List the calendars on the caller's calendar list", scopes: ["https://www.googleapis.com/auth/calendar.readonly"], description: "One collection: the caller's calendars via calendarList.list. Read params: showHidden, cursor. An `id` is the `calendarId` of @gmail/calendar-events and @gmail/calendar-event-get.", faults: googleFaults() },
         { name: "calendar-events", file: "calendar-events.mjs", summary: "Read the events of one calendar (list and delta)", scopes: ["https://www.googleapis.com/auth/calendar.readonly"], description: "One collection: events of one calendar via events.list — list and delta in one resource. Read params: calendarId (default primary), timeMin, timeMax, q, singleEvents, maxResults, cursor (a pageToken or a syncToken). Returns continuation and nextDeltaToken (a syncToken).", faults: googleFaults([googleNotFound]) },
-        { name: "calendar-event-get", file: "calendar-event-get.mjs", summary: "Read a single calendar event", scopes: ["https://www.googleapis.com/auth/calendar.readonly"], description: "One collection of one record: a calendar event via events.get. Read params: calendarId (default primary), eventId (required). The eventId comes from @doax/calendar-events.", faults: googleFaults([googleNotFound]) },
-        { name: "contacts-list", file: "contacts-list.mjs", summary: "List the caller's contacts (list and delta)", scopes: ["https://www.googleapis.com/auth/contacts.readonly"], description: "One collection: the caller's contacts via People people.connections.list — list and delta. Read params: pageSize, personFields, cursor (a pageToken or a syncToken). Returns continuation and nextDeltaToken (a syncToken). A `resourceName` is the parameter of @doax/contacts-get.", faults: googleFaults([googleNotFound]) },
-        { name: "contacts-get", file: "contacts-get.mjs", summary: "Read a single contact", scopes: ["https://www.googleapis.com/auth/contacts.readonly"], description: "One collection of one record: a contact via People people.get. Read params: resourceName (required), personFields. The resourceName comes from @doax/contacts-list.", faults: googleFaults([googleNotFound]) },
-        { name: "tasklists-list", file: "tasklists-list.mjs", summary: "List the caller's task lists", scopes: ["https://www.googleapis.com/auth/tasks.readonly"], description: "One collection: the caller's task lists via tasklists.list. Read params: maxResults, cursor. An `id` is the `tasklist` parameter of @doax/tasks-list and @doax/task-get.", faults: googleFaults() },
-        { name: "tasks-list", file: "tasks-list.mjs", summary: "List the tasks in one task list", scopes: ["https://www.googleapis.com/auth/tasks.readonly"], description: "One collection: the tasks in one list via tasks.list. Read params: tasklist (required), showCompleted, showHidden, updatedMin, maxResults, cursor. A task `id` is the `task` parameter of @doax/task-get.", faults: googleFaults([googleNotFound]) },
-        { name: "task-get", file: "task-get.mjs", summary: "Read a single task", scopes: ["https://www.googleapis.com/auth/tasks.readonly"], description: "One collection of one record: a task via tasks.get. Read params: tasklist (required), task (required). The ids come from @doax/tasklists-list and @doax/tasks-list.", faults: googleFaults([googleNotFound]) },
+        { name: "calendar-event-get", file: "calendar-event-get.mjs", summary: "Read a single calendar event", scopes: ["https://www.googleapis.com/auth/calendar.readonly"], description: "One collection of one record: a calendar event via events.get. Read params: calendarId (default primary), eventId (required). The eventId comes from @gmail/calendar-events.", faults: googleFaults([googleNotFound]) },
+        { name: "contacts-list", file: "contacts-list.mjs", summary: "List the caller's contacts (list and delta)", scopes: ["https://www.googleapis.com/auth/contacts.readonly"], description: "One collection: the caller's contacts via People people.connections.list — list and delta. Read params: pageSize, personFields, cursor (a pageToken or a syncToken). Returns continuation and nextDeltaToken (a syncToken). A `resourceName` is the parameter of @gmail/contacts-get.", faults: googleFaults([googleNotFound]) },
+        { name: "contacts-get", file: "contacts-get.mjs", summary: "Read a single contact", scopes: ["https://www.googleapis.com/auth/contacts.readonly"], description: "One collection of one record: a contact via People people.get. Read params: resourceName (required), personFields. The resourceName comes from @gmail/contacts-list.", faults: googleFaults([googleNotFound]) },
+        { name: "tasklists-list", file: "tasklists-list.mjs", summary: "List the caller's task lists", scopes: ["https://www.googleapis.com/auth/tasks.readonly"], description: "One collection: the caller's task lists via tasklists.list. Read params: maxResults, cursor. An `id` is the `tasklist` parameter of @gmail/tasks-list and @gmail/task-get.", faults: googleFaults() },
+        { name: "tasks-list", file: "tasks-list.mjs", summary: "List the tasks in one task list", scopes: ["https://www.googleapis.com/auth/tasks.readonly"], description: "One collection: the tasks in one list via tasks.list. Read params: tasklist (required), showCompleted, showHidden, updatedMin, maxResults, cursor. A task `id` is the `task` parameter of @gmail/task-get.", faults: googleFaults([googleNotFound]) },
+        { name: "task-get", file: "task-get.mjs", summary: "Read a single task", scopes: ["https://www.googleapis.com/auth/tasks.readonly"], description: "One collection of one record: a task via tasks.get. Read params: tasklist (required), task (required). The ids come from @gmail/tasklists-list and @gmail/tasks-list.", faults: googleFaults([googleNotFound]) },
     ].map((r) => ({
-        identity: `@doax/${r.name}@1.0.0`,
+        identity: `@gmail/${r.name}@1.0.0`,
         file: r.file,
         manifest: {
             kind: "data-source",

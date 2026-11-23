@@ -1,9 +1,9 @@
 /**
-  * @doax/onedrive-list — data-source (spec §5).
+  * @onedrive/list — data-source (spec §5).
   * One collection: the items (files and folders) in one OneDrive folder, via
   * GET /me/drive/root/children (or /items/{id}/children). Caller-relative (§5.3): you read
   * exactly what the Files.Read token may read. An item's `id` is the `itemId` parameter of
-  * @doax/onedrive-get, and a folder's `id` is the `itemId` parameter of this resource.
+  * @onedrive/get, and a folder's `id` is the `itemId` parameter of this resource.
   */
 
 const GRAPH = "https://graph.microsoft.com/v1.0";
@@ -17,13 +17,13 @@ function graphFault(status, body, retryAfter) {
         if (code === "Authorization_RequestDenied" || /scope|permission|consent/i.test(message)) {
             return Object.assign(new Error("missing-scope: the signed-in app lacks a required Microsoft Graph permission"), {
                 faultClass: "missing-scope",
-                detail: { neededScope: "Files.Read", graphMessage: message || null, fix: "re-consent at https://auth.doax.io?appid=@doax/onedrive-login, then re-authenticate (doax auth set @doax/onedrive-login)" },
+                detail: { neededScope: "Files.Read", graphMessage: message || null, fix: "re-consent at https://auth.doax.io?appid=@onedrive/login, then re-authenticate (doax auth set @onedrive/login)" },
             });
         }
         return Object.assign(new Error(`access-denied: ${code ?? "forbidden"}`), { faultClass: "access-denied", graphError: code });
     }
     if (status === 429) return Object.assign(new Error("rate-limited: Microsoft Graph throttled the request"), { faultClass: "rate-limited", retryAfter: retryAfter ?? null });
-    if (status === 404) return Object.assign(new Error(`not-found: ${code ?? "drive, folder, or item not found"}`), { faultClass: "not-found", graphError: code, detail: { fix: "check the itemId/driveId (@doax/onedrive-list of the parent folder)" } });
+    if (status === 404) return Object.assign(new Error(`not-found: ${code ?? "drive, folder, or item not found"}`), { faultClass: "not-found", graphError: code, detail: { fix: "check the itemId/driveId (@onedrive/list of the parent folder)" } });
     if (status >= 500) return Object.assign(new Error(`graph-unavailable: HTTP ${status}`), { faultClass: "graph-unavailable" });
     return Object.assign(new Error(`graph-error: ${code ?? status}`), { faultClass: "graph-error", graphError: code });
 }
@@ -54,7 +54,7 @@ function childrenPath(input) {
 const RECORD_SCHEMA = {
     type: "object",
     properties: {
-        id: { type: "string", description: "item id — the `itemId` parameter of @doax/onedrive-get (or this resource, for a folder)" },
+        id: { type: "string", description: "item id — the `itemId` parameter of @onedrive/get (or this resource, for a folder)" },
         name: { type: "string" },
         isFolder: { type: "boolean" },
         mimeType: { type: ["string", "null"], description: "the file's mime type; null for folders" },
@@ -70,7 +70,7 @@ const RECORD_SCHEMA = {
 
 export function describe() {
     return {
-        identity: "@doax/onedrive-list",
+        identity: "@onedrive/list",
         kind: "data-source",
         collection: "items in one OneDrive folder, visible to the caller",
         readParams: {

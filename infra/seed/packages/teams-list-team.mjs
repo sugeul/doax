@@ -1,5 +1,5 @@
 /**
-  * @doax/teams-list-team — data-source (spec §5).
+  * @teams/list-team — data-source (spec §5).
   * One collection: the Microsoft Teams the caller has joined, via GET /me/joinedTeams.
   * The natural first read: account↔tenant is fixed at login, but a user belongs to many
   * Teams, so this yields the team ids that teams-list-channel, teams-channel-messages,
@@ -19,7 +19,7 @@ function graphFault(status, body, retryAfter) {
                 detail: {
                     neededScope: null,
                     graphMessage: message || null,
-                    fix: "grant the delegated permission at https://portal.azure.com → Entra ID → App registrations → your app → API permissions (admin-consent if required), then re-authenticate (doax auth set @doax/teams-login)",
+                    fix: "grant the delegated permission at https://portal.azure.com → Entra ID → App registrations → your app → API permissions (admin-consent if required), then re-authenticate (doax auth set @teams/login)",
                 },
             });
         }
@@ -34,7 +34,7 @@ function graphFault(status, body, retryAfter) {
         return Object.assign(new Error(`not-found: ${code ?? "team or channel id not found"}`), {
             faultClass: "not-found",
             graphError: code,
-            detail: { fix: "check the team and channel ids (@doax/teams-list-team, @doax/teams-list-channel)" },
+            detail: { fix: "check the team and channel ids (@teams/list-team, @teams/list-channel)" },
         });
     }
     if (status >= 500) return Object.assign(new Error(`graph-unavailable: HTTP ${status}`), { faultClass: "graph-unavailable" });
@@ -68,7 +68,7 @@ const RECORD_SCHEMA = {
 
 export function describe() {
     return {
-        identity: "@doax/teams-list-team",
+        identity: "@teams/list-team",
         kind: "data-source",
         collection: "Microsoft Teams the caller has joined",
         readParams: { cursor: "continuation (an @odata.nextLink url)" },

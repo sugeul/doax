@@ -1,16 +1,16 @@
 /**
-  * @doax/contacts-list — data-source (spec §5).
+  * @gmail/contacts-list — data-source (spec §5).
   * One collection: the caller's contacts, via People API people.connections.list — list AND delta.
   * A first read returns a page of connections and, at the end, a sync token; thereafter the caller
   * polls with that token via `cursor` for incremental changes. A `resourceName` is the parameter of
-  * @doax/contacts-get. Caller-relative (§5.3).
+  * @gmail/contacts-get. Caller-relative (§5.3).
   *
   *   continuation   — a People pageToken: MORE pages of the current set exist now.
   *   nextDeltaToken — a People syncToken: this set is drained; poll changes later with it (as `cursor`).
   */
 
 const BASE = "https://people.googleapis.com/v1";
-const AUTH_URL = "https://auth.doax.io?appid=@doax/gmail-login";
+const AUTH_URL = "https://auth.doax.io?appid=@gmail/login";
 const PERSON_FIELDS = "names,emailAddresses,phoneNumbers,organizations,metadata";
 
 function googleFault(status, body, retryAfter) {
@@ -21,7 +21,7 @@ function googleFault(status, body, retryAfter) {
     if (status === 403) {
         if (reason === "accessNotConfigured" || /accessNotConfigured|has not been used in project|is disabled/i.test(message)) return Object.assign(new Error("access-denied: the People API is not enabled for this OAuth client's project"), { faultClass: "access-denied", googleError: reason, detail: { fix: "enable the People API in the doax-adapter-gmail project, then retry" } });
         if (reason === "rateLimitExceeded" || reason === "userRateLimitExceeded") return Object.assign(new Error("rate-limited: People throttled the request"), { faultClass: "rate-limited", retryAfter: retryAfter ?? null });
-        if (reason === "insufficientPermissions" || /insufficient.*scope/i.test(message)) return Object.assign(new Error("missing-scope: the token lacks contacts.readonly"), { faultClass: "missing-scope", detail: { neededScope: "https://www.googleapis.com/auth/contacts.readonly", fix: `re-consent at ${AUTH_URL}, then re-authenticate (doax auth set @doax/gmail-login)` } });
+        if (reason === "insufficientPermissions" || /insufficient.*scope/i.test(message)) return Object.assign(new Error("missing-scope: the token lacks contacts.readonly"), { faultClass: "missing-scope", detail: { neededScope: "https://www.googleapis.com/auth/contacts.readonly", fix: `re-consent at ${AUTH_URL}, then re-authenticate (doax auth set @gmail/login)` } });
         return Object.assign(new Error(`access-denied: ${reason ?? "forbidden"}`), { faultClass: "access-denied", googleError: reason });
     }
     if (status === 429) return Object.assign(new Error("rate-limited: People throttled the request"), { faultClass: "rate-limited", retryAfter: retryAfter ?? null });
@@ -52,7 +52,7 @@ const primary = (arr, field) => (arr ?? []).map((x) => x[field]).filter(Boolean)
 const RECORD_SCHEMA = {
     type: "object",
     properties: {
-        resourceName: { type: "string", description: "people/* id — the `resourceName` parameter of @doax/contacts-get" },
+        resourceName: { type: "string", description: "people/* id — the `resourceName` parameter of @gmail/contacts-get" },
         displayName: { type: ["string", "null"] },
         emails: { type: "array", items: { type: "string" } },
         phones: { type: "array", items: { type: "string" } },
@@ -64,7 +64,7 @@ const RECORD_SCHEMA = {
 
 export function describe() {
     return {
-        identity: "@doax/contacts-list",
+        identity: "@gmail/contacts-list",
         kind: "data-source",
         collection: "the caller's contacts (connections)",
         readParams: {

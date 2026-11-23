@@ -1,11 +1,11 @@
 /**
-  * @doax/tasklists-list — data-source (spec §5).
+  * @gmail/tasklists-list — data-source (spec §5).
   * One collection: the caller's task lists, via Tasks API tasklists.list. A list's `id` is the
-  * `tasklist` parameter of @doax/tasks-list and @doax/task-get. Caller-relative (§5.3).
+  * `tasklist` parameter of @gmail/tasks-list and @gmail/task-get. Caller-relative (§5.3).
   */
 
 const BASE = "https://tasks.googleapis.com/tasks/v1";
-const AUTH_URL = "https://auth.doax.io?appid=@doax/gmail-login";
+const AUTH_URL = "https://auth.doax.io?appid=@gmail/login";
 
 function googleFault(status, body, retryAfter) {
     const err = body?.error;
@@ -15,7 +15,7 @@ function googleFault(status, body, retryAfter) {
     if (status === 403) {
         if (reason === "accessNotConfigured" || /accessNotConfigured|has not been used in project|is disabled/i.test(message)) return Object.assign(new Error("access-denied: the Tasks API is not enabled for this OAuth client's project"), { faultClass: "access-denied", googleError: reason, detail: { fix: "enable the Tasks API in the doax-adapter-gmail project, then retry" } });
         if (reason === "rateLimitExceeded" || reason === "userRateLimitExceeded") return Object.assign(new Error("rate-limited: Tasks throttled the request"), { faultClass: "rate-limited", retryAfter: retryAfter ?? null });
-        if (reason === "insufficientPermissions" || /insufficient.*scope/i.test(message)) return Object.assign(new Error("missing-scope: the token lacks tasks.readonly"), { faultClass: "missing-scope", detail: { neededScope: "https://www.googleapis.com/auth/tasks.readonly", fix: `re-consent at ${AUTH_URL}, then re-authenticate (doax auth set @doax/gmail-login)` } });
+        if (reason === "insufficientPermissions" || /insufficient.*scope/i.test(message)) return Object.assign(new Error("missing-scope: the token lacks tasks.readonly"), { faultClass: "missing-scope", detail: { neededScope: "https://www.googleapis.com/auth/tasks.readonly", fix: `re-consent at ${AUTH_URL}, then re-authenticate (doax auth set @gmail/login)` } });
         return Object.assign(new Error(`access-denied: ${reason ?? "forbidden"}`), { faultClass: "access-denied", googleError: reason });
     }
     if (status === 429) return Object.assign(new Error("rate-limited: Tasks throttled the request"), { faultClass: "rate-limited", retryAfter: retryAfter ?? null });
@@ -41,7 +41,7 @@ async function google(path, token, params) {
 const RECORD_SCHEMA = {
     type: "object",
     properties: {
-        id: { type: "string", description: "task list id — the `tasklist` parameter of @doax/tasks-list" },
+        id: { type: "string", description: "task list id — the `tasklist` parameter of @gmail/tasks-list" },
         title: { type: "string" },
         updated: { type: ["string", "null"] },
     },
@@ -50,7 +50,7 @@ const RECORD_SCHEMA = {
 
 export function describe() {
     return {
-        identity: "@doax/tasklists-list",
+        identity: "@gmail/tasklists-list",
         kind: "data-source",
         collection: "the caller's task lists",
         readParams: { maxResults: "max lists per page (default 100)", cursor: "continuation (a Tasks pageToken)" },

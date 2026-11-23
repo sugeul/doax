@@ -1,12 +1,12 @@
 /**
-  * @doax/calendar-list — data-source (spec §5).
+  * @gmail/calendar-list — data-source (spec §5).
   * One collection: the calendars on the caller's calendar list, via calendarList.list. The natural
-  * first read — an entry's `id` is the `calendarId` parameter of @doax/calendar-events and
-  * @doax/calendar-event-get. Caller-relative (§5.3).
+  * first read — an entry's `id` is the `calendarId` parameter of @gmail/calendar-events and
+  * @gmail/calendar-event-get. Caller-relative (§5.3).
   */
 
 const BASE = "https://www.googleapis.com/calendar/v3";
-const AUTH_URL = "https://auth.doax.io?appid=@doax/gmail-login";
+const AUTH_URL = "https://auth.doax.io?appid=@gmail/login";
 
 function googleFault(status, body, retryAfter) {
     const err = body?.error;
@@ -16,7 +16,7 @@ function googleFault(status, body, retryAfter) {
     if (status === 403) {
         if (reason === "accessNotConfigured" || /accessNotConfigured|has not been used in project|is disabled/i.test(message)) return Object.assign(new Error("access-denied: the Calendar API is not enabled for this OAuth client's project"), { faultClass: "access-denied", googleError: reason, detail: { fix: "enable the Calendar API in the doax-adapter-gmail project, then retry" } });
         if (reason === "rateLimitExceeded" || reason === "userRateLimitExceeded") return Object.assign(new Error("rate-limited: Calendar throttled the request"), { faultClass: "rate-limited", retryAfter: retryAfter ?? null });
-        if (reason === "insufficientPermissions" || /insufficient.*scope/i.test(message)) return Object.assign(new Error("missing-scope: the token lacks calendar.readonly"), { faultClass: "missing-scope", detail: { neededScope: "https://www.googleapis.com/auth/calendar.readonly", fix: `re-consent at ${AUTH_URL}, then re-authenticate (doax auth set @doax/gmail-login)` } });
+        if (reason === "insufficientPermissions" || /insufficient.*scope/i.test(message)) return Object.assign(new Error("missing-scope: the token lacks calendar.readonly"), { faultClass: "missing-scope", detail: { neededScope: "https://www.googleapis.com/auth/calendar.readonly", fix: `re-consent at ${AUTH_URL}, then re-authenticate (doax auth set @gmail/login)` } });
         return Object.assign(new Error(`access-denied: ${reason ?? "forbidden"}`), { faultClass: "access-denied", googleError: reason });
     }
     if (status === 429) return Object.assign(new Error("rate-limited: Calendar throttled the request"), { faultClass: "rate-limited", retryAfter: retryAfter ?? null });
@@ -42,7 +42,7 @@ async function google(path, token, params) {
 const RECORD_SCHEMA = {
     type: "object",
     properties: {
-        id: { type: "string", description: "calendar id — the `calendarId` parameter of @doax/calendar-events" },
+        id: { type: "string", description: "calendar id — the `calendarId` parameter of @gmail/calendar-events" },
         summary: { type: "string" },
         description: { type: ["string", "null"] },
         primary: { type: ["boolean", "null"] },
@@ -55,7 +55,7 @@ const RECORD_SCHEMA = {
 
 export function describe() {
     return {
-        identity: "@doax/calendar-list",
+        identity: "@gmail/calendar-list",
         kind: "data-source",
         collection: "the calendars on the caller's calendar list",
         readParams: { showHidden: "include hidden calendars (default false)", cursor: "continuation (a Calendar pageToken)" },

@@ -1,5 +1,5 @@
 /**
-  * @doax/teams-post — action (spec §6): post a message to a Teams channel.
+  * @teams/post — action (spec §6): post a message to a Teams channel.
   * Posts as the signed-in user (delegated token from teams-login), via
   * POST /teams/{team}/channels/{channel}/messages — or /messages/{id}/replies when
   * replyToId is given. dry-run mode: predictive — validates the token and echoes what
@@ -21,7 +21,7 @@ function graphFault(status, body, retryAfter) {
                 detail: {
                     neededScope: null,
                     graphMessage: message || null,
-                    fix: "grant the delegated permission at https://portal.azure.com → Entra ID → App registrations → your app → API permissions (admin-consent if required), then re-authenticate (doax auth set @doax/teams-login)",
+                    fix: "grant the delegated permission at https://portal.azure.com → Entra ID → App registrations → your app → API permissions (admin-consent if required), then re-authenticate (doax auth set @teams/login)",
                 },
             });
         }
@@ -36,7 +36,7 @@ function graphFault(status, body, retryAfter) {
         return Object.assign(new Error(`not-found: ${code ?? "team or channel id not found"}`), {
             faultClass: "not-found",
             graphError: code,
-            detail: { fix: "check the team and channel ids (@doax/teams-list-team, @doax/teams-list-channel)" },
+            detail: { fix: "check the team and channel ids (@teams/list-team, @teams/list-channel)" },
         });
     }
     if (status >= 500) return Object.assign(new Error(`graph-unavailable: HTTP ${status}`), { faultClass: "graph-unavailable" });
@@ -61,7 +61,7 @@ async function graph(path, token, { method = "GET", body } = {}) {
 
 export function describe() {
     return {
-        identity: "@doax/teams-post",
+        identity: "@teams/post",
         kind: "action",
         effect: "posts one message to one Teams channel as the signed-in user",
         executeParams: {

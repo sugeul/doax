@@ -1,12 +1,12 @@
 /**
-  * @doax/gmail-get — data-source (spec §5).
+  * @gmail/get — data-source (spec §5).
   * One collection of one record: a single Gmail message, via users.messages.get (format=full),
-  * with the plain-text body decoded. The `messageId` comes from @doax/gmail-messages (its `id`).
+  * with the plain-text body decoded. The `messageId` comes from @gmail/messages (its `id`).
   * Caller-relative (§5.3): resolves only if the gmail.readonly token may see the message.
   */
 
 const BASE = "https://gmail.googleapis.com/gmail/v1";
-const AUTH_URL = "https://auth.doax.io?appid=@doax/gmail-login";
+const AUTH_URL = "https://auth.doax.io?appid=@gmail/login";
 
 function googleFault(status, body, retryAfter) {
     const err = body?.error;
@@ -16,11 +16,11 @@ function googleFault(status, body, retryAfter) {
     if (status === 403) {
         if (reason === "accessNotConfigured" || /accessNotConfigured|has not been used in project|is disabled/i.test(message)) return Object.assign(new Error("access-denied: the Gmail API is not enabled for this OAuth client's project"), { faultClass: "access-denied", googleError: reason, detail: { fix: "enable the Gmail API in the doax-adapter-gmail project, then retry" } });
         if (reason === "rateLimitExceeded" || reason === "userRateLimitExceeded") return Object.assign(new Error("rate-limited: Gmail throttled the request"), { faultClass: "rate-limited", retryAfter: retryAfter ?? null });
-        if (reason === "insufficientPermissions" || /insufficient.*scope/i.test(message)) return Object.assign(new Error("missing-scope: the token lacks gmail.readonly"), { faultClass: "missing-scope", detail: { neededScope: "https://www.googleapis.com/auth/gmail.readonly", fix: `re-consent at ${AUTH_URL}, then re-authenticate (doax auth set @doax/gmail-login)` } });
+        if (reason === "insufficientPermissions" || /insufficient.*scope/i.test(message)) return Object.assign(new Error("missing-scope: the token lacks gmail.readonly"), { faultClass: "missing-scope", detail: { neededScope: "https://www.googleapis.com/auth/gmail.readonly", fix: `re-consent at ${AUTH_URL}, then re-authenticate (doax auth set @gmail/login)` } });
         return Object.assign(new Error(`access-denied: ${reason ?? "forbidden"}`), { faultClass: "access-denied", googleError: reason });
     }
     if (status === 429) return Object.assign(new Error("rate-limited: Gmail throttled the request"), { faultClass: "rate-limited", retryAfter: retryAfter ?? null });
-    if (status === 404) return Object.assign(new Error(`not-found: ${reason ?? "message id not found"}`), { faultClass: "not-found", googleError: reason, detail: { fix: "check the messageId (@doax/gmail-messages)" } });
+    if (status === 404) return Object.assign(new Error(`not-found: ${reason ?? "message id not found"}`), { faultClass: "not-found", googleError: reason, detail: { fix: "check the messageId (@gmail/messages)" } });
     if (status >= 500) return Object.assign(new Error(`google-unavailable: HTTP ${status}`), { faultClass: "google-unavailable" });
     return Object.assign(new Error(`google-error: ${reason ?? status}`), { faultClass: "google-error", googleError: reason });
 }
@@ -75,7 +75,7 @@ const RECORD_SCHEMA = {
 
 export function describe() {
     return {
-        identity: "@doax/gmail-get",
+        identity: "@gmail/get",
         kind: "data-source",
         collection: "a single Gmail message",
         readParams: { messageId: "the Gmail message id (required)", format: "full | metadata | minimal (default full)" },

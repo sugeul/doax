@@ -1,12 +1,12 @@
 /**
-  * @doax/onedrive-login — authenticator for OneDrive via Microsoft Graph (spec §4.7).
+  * @onedrive/login — authenticator for OneDrive via Microsoft Graph (spec §4.7).
   * Subject: personal. Interaction: secret-entry (a Microsoft OAuth refresh token).
   *
-  * A user mints a refresh token once at https://auth.doax.io?appid=@doax/onedrive-login (the
+  * A user mints a refresh token once at https://auth.doax.io?appid=@onedrive/login (the
   * consent-redirect mirror), stores it (e.g. in .env), and pastes it here. This module exchanges
   * that refresh token for a short-lived access token using the OAuth *client* (client_id/
   * client_secret) that it reads from AWS Secrets Manager via the local aws-cli. The access token
-  * is what every @doax/onedrive-* data-source consumes as context.credential.token; `refresh`
+  * is what every @onedrive/* data-source consumes as context.credential.token; `refresh`
   * mints a fresh one from the same refresh token.
   *
   * Scope the refresh token carries: offline_access Files.Read User.Read (read-only).
@@ -23,7 +23,7 @@ const SECRET_ID = "doax-adapter-onedrive";
 const REGION = "ap-northeast-2";
 const AWS_PROFILE = "doax";
 const SCOPE = "offline_access Files.Read User.Read";
-const AUTH_URL = "https://auth.doax.io?appid=@doax/onedrive-login";
+const AUTH_URL = "https://auth.doax.io?appid=@onedrive/login";
 
 function graphFault(status, body, retryAfter) {
     const code = body?.error?.code ?? null;
@@ -33,7 +33,7 @@ function graphFault(status, body, retryAfter) {
         if (code === "Authorization_RequestDenied" || /scope|permission|consent/i.test(message)) {
             return Object.assign(new Error("missing-scope: the signed-in app lacks a required Microsoft Graph permission"), {
                 faultClass: "missing-scope",
-                detail: { neededScope: SCOPE, graphMessage: message || null, fix: `re-consent at ${AUTH_URL} so the token carries the Files.Read scope, then re-authenticate (doax auth set @doax/onedrive-login --secret <refresh-token>)` },
+                detail: { neededScope: SCOPE, graphMessage: message || null, fix: `re-consent at ${AUTH_URL} so the token carries the Files.Read scope, then re-authenticate (doax auth set @onedrive/login --secret <refresh-token>)` },
             });
         }
         return Object.assign(new Error(`access-denied: ${code ?? "forbidden"}`), { faultClass: "access-denied", graphError: code });
@@ -98,7 +98,7 @@ async function exchangeRefresh(client, refreshToken) {
     if (!res.ok) {
         throw Object.assign(new Error(`invalid-auth: refresh failed (${body.error ?? res.status})`), {
             faultClass: "invalid-auth",
-            detail: { fix: `re-mint a refresh token at ${AUTH_URL} and re-authenticate (doax auth set @doax/onedrive-login --secret <refresh-token>)` },
+            detail: { fix: `re-mint a refresh token at ${AUTH_URL} and re-authenticate (doax auth set @onedrive/login --secret <refresh-token>)` },
         });
     }
     return body; // { access_token, expires_in, scope, token_type, refresh_token? }
@@ -127,7 +127,7 @@ function lifetimeOf(cred) {
 
 export function describe() {
     return {
-        identity: "@doax/onedrive-login",
+        identity: "@onedrive/login",
         kind: "authenticator",
         subject: "personal",
         interaction: "secret-entry",
@@ -154,7 +154,7 @@ export async function authenticate(input, context) {
     if (!refreshToken) {
         throw Object.assign(new Error(`invalid-auth: mode ${mode} has no refresh token to work with`), {
             faultClass: "invalid-auth",
-            detail: { fix: `open ${AUTH_URL} to mint one, then: doax auth set @doax/onedrive-login --secret <refresh-token>` },
+            detail: { fix: `open ${AUTH_URL} to mint one, then: doax auth set @onedrive/login --secret <refresh-token>` },
         });
     }
 

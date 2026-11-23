@@ -1,5 +1,5 @@
 /**
-  * @doax/slack-post — action (spec §6): post a message to a Slack channel.
+  * @slack/post — action (spec §6): post a message to a Slack channel.
   * dry-run mode: predictive — validates the token and echoes what would be sent, with zero
   * side effects (§6.1). Idempotency: non-idempotent — Slack has no post dedupe, so the
   * Executor must confirm retries (§6.2). The idempotency key is recorded in audit only.
@@ -22,7 +22,7 @@ async function slack(method, token, params = {}) {
                 detail: {
                     neededScope: body.needed ?? null,
                     providedScopes: body.provided ?? null,
-                    fix: "add the scope at https://api.slack.com/apps → your app → OAuth & Permissions → Bot Token Scopes, reinstall the app, then retry (doax auth set @doax/slack-login --secret ... if the token rotated)",
+                    fix: "add the scope at https://api.slack.com/apps → your app → OAuth & Permissions → Bot Token Scopes, reinstall the app, then retry (doax auth set @slack/login --secret ... if the token rotated)",
                 },
             });
         }
@@ -40,7 +40,7 @@ async function slack(method, token, params = {}) {
 
 export function describe() {
     return {
-        identity: "@doax/slack-post",
+        identity: "@slack/post",
         kind: "action",
         effect: "posts one message to one Slack channel as the authenticated principal",
         executeParams: { channel: "channel id (required)", text: "message text (required)", thread_ts: "reply in thread (optional)" },

@@ -1,9 +1,9 @@
 /**
-  * @doax/gmail-login — shared authenticator for Google user APIs (spec §4.7).
+  * @gmail/login — shared authenticator for Google user APIs (spec §4.7).
   * Subject: personal. Interaction: secret-entry (a Google OAuth refresh token).
   *
   * One login for Gmail, Calendar, Contacts (People) and Tasks: the user consents once at
-  * https://auth.doax.io?appid=@doax/gmail-login and pastes the refresh token here. This module
+  * https://auth.doax.io?appid=@gmail/login and pastes the refresh token here. This module
   * exchanges it for a short-lived access token using the OAuth client it reads from AWS Secrets
   * Manager (doax-adapter-gmail) via the local aws-cli. Every @doax/{gmail,calendar,contacts,
   * tasks}-* resource references this authenticator, so one login serves them all.
@@ -23,7 +23,7 @@ const SECRET_ID = "doax-adapter-gmail";
 const REGION = "ap-northeast-2";
 const AWS_PROFILE = "doax";
 const SCOPE = "openid email offline_access https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/contacts.readonly https://www.googleapis.com/auth/tasks.readonly";
-const AUTH_URL = "https://auth.doax.io?appid=@doax/gmail-login";
+const AUTH_URL = "https://auth.doax.io?appid=@gmail/login";
 
 function googleFault(status, body, retryAfter) {
     const err = body?.error;
@@ -42,7 +42,7 @@ function googleFault(status, body, retryAfter) {
         if (reason === "insufficientPermissions" || /insufficient.*scope/i.test(message)) {
             return Object.assign(new Error("missing-scope: the refresh token lacks a required scope"), {
                 faultClass: "missing-scope",
-                detail: { neededScope: SCOPE, googleMessage: message || null, fix: `re-consent at ${AUTH_URL}, then re-authenticate (doax auth set @doax/gmail-login --secret <refresh-token>)` },
+                detail: { neededScope: SCOPE, googleMessage: message || null, fix: `re-consent at ${AUTH_URL}, then re-authenticate (doax auth set @gmail/login --secret <refresh-token>)` },
             });
         }
         return Object.assign(new Error(`access-denied: ${reason ?? "forbidden"}`), { faultClass: "access-denied", googleError: reason });
@@ -99,7 +99,7 @@ async function exchangeRefresh(client, refreshToken) {
     if (!res.ok) {
         throw Object.assign(new Error(`invalid-auth: refresh failed (${body.error ?? res.status})`), {
             faultClass: "invalid-auth",
-            detail: { fix: `re-mint a refresh token at ${AUTH_URL} and re-authenticate (doax auth set @doax/gmail-login --secret <refresh-token>)` },
+            detail: { fix: `re-mint a refresh token at ${AUTH_URL} and re-authenticate (doax auth set @gmail/login --secret <refresh-token>)` },
         });
     }
     return body; // { access_token, expires_in, scope, token_type }
@@ -128,7 +128,7 @@ function lifetimeOf(cred) {
 
 export function describe() {
     return {
-        identity: "@doax/gmail-login",
+        identity: "@gmail/login",
         kind: "authenticator",
         subject: "personal",
         interaction: "secret-entry",
@@ -151,7 +151,7 @@ export async function authenticate(input, context) {
     if (!refreshToken) {
         throw Object.assign(new Error(`invalid-auth: mode ${mode} has no refresh token to work with`), {
             faultClass: "invalid-auth",
-            detail: { fix: `open ${AUTH_URL} to mint one, then: doax auth set @doax/gmail-login --secret <refresh-token>` },
+            detail: { fix: `open ${AUTH_URL} to mint one, then: doax auth set @gmail/login --secret <refresh-token>` },
         });
     }
 

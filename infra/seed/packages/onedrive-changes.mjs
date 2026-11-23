@@ -1,5 +1,5 @@
 /**
-  * @doax/onedrive-changes — data-source (spec §5).
+  * @onedrive/changes — data-source (spec §5).
   * One collection: the change feed (delta) for the caller's OneDrive, via GET /me/drive/root/delta
   * — the "delta list". With no cursor, read() establishes a baseline (delta?token=latest) and
   * returns the deltaLink to poll from; thereafter the caller polls with the `cursor` it returned
@@ -21,7 +21,7 @@ function graphFault(status, body, retryAfter) {
         if (code === "Authorization_RequestDenied" || /scope|permission|consent/i.test(message)) {
             return Object.assign(new Error("missing-scope: the signed-in app lacks a required Microsoft Graph permission"), {
                 faultClass: "missing-scope",
-                detail: { neededScope: "Files.Read", graphMessage: message || null, fix: "re-consent at https://auth.doax.io?appid=@doax/onedrive-login, then re-authenticate (doax auth set @doax/onedrive-login)" },
+                detail: { neededScope: "Files.Read", graphMessage: message || null, fix: "re-consent at https://auth.doax.io?appid=@onedrive/login, then re-authenticate (doax auth set @onedrive/login)" },
             });
         }
         return Object.assign(new Error(`access-denied: ${code ?? "forbidden"}`), { faultClass: "access-denied", graphError: code });
@@ -70,7 +70,7 @@ const RECORD_SCHEMA = {
 
 export function describe() {
     return {
-        identity: "@doax/onedrive-changes",
+        identity: "@onedrive/changes",
         kind: "data-source",
         collection: "the change feed (delta) for the caller's OneDrive",
         readParams: {

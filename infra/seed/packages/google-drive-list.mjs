@@ -1,8 +1,8 @@
 /**
-  * @doax/google-drive-list — data-source (spec §5).
+  * @gdrive/list — data-source (spec §5).
   * One collection: the Drive files visible to the caller's token, via GET /drive/v3/files.
   * Caller-relative (§5.3): you read exactly what the drive.readonly token may read. Its `id`
-  * field is the `fileId` parameter of @doax/google-drive-get.
+  * field is the `fileId` parameter of @gdrive/get.
   */
 
 const DRIVE = "https://www.googleapis.com/drive/v3";
@@ -25,7 +25,7 @@ function driveFault(status, body, retryAfter) {
         if (reason === "insufficientPermissions" || /insufficient.*scope/i.test(message)) {
             return Object.assign(new Error("missing-scope: the token lacks the Drive scope this operation needs"), {
                 faultClass: "missing-scope",
-                detail: { neededScope: "https://www.googleapis.com/auth/drive.readonly", driveMessage: message || null, fix: "re-consent at https://auth.doax.io?appid=@doax/google-drive-login, then re-authenticate (doax auth set @doax/google-drive-login)" },
+                detail: { neededScope: "https://www.googleapis.com/auth/drive.readonly", driveMessage: message || null, fix: "re-consent at https://auth.doax.io?appid=@gdrive/login, then re-authenticate (doax auth set @gdrive/login)" },
             });
         }
         return Object.assign(new Error(`access-denied: ${reason ?? "forbidden"}`), { faultClass: "access-denied", driveError: reason });
@@ -55,7 +55,7 @@ async function drive(path, token, params) {
 const RECORD_SCHEMA = {
     type: "object",
     properties: {
-        id: { type: "string", description: "file id — the `fileId` parameter of @doax/google-drive-get" },
+        id: { type: "string", description: "file id — the `fileId` parameter of @gdrive/get" },
         name: { type: "string" },
         mimeType: { type: "string", description: "e.g. application/vnd.google-apps.folder for a folder" },
         modifiedTime: { type: ["string", "null"] },
@@ -72,7 +72,7 @@ const RECORD_SCHEMA = {
 
 export function describe() {
     return {
-        identity: "@doax/google-drive-list",
+        identity: "@gdrive/list",
         kind: "data-source",
         collection: "Drive files visible to the caller",
         readParams: {

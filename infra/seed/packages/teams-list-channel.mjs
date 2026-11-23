@@ -1,5 +1,5 @@
 /**
-  * @doax/teams-list-channel — data-source (spec §5).
+  * @teams/list-channel — data-source (spec §5).
   * One collection: the channels of one Microsoft Team, via GET /teams/{team}/channels.
   * Its `id` field is the `channel` parameter of teams-channel-messages and teams-post;
   * the `team` it reads is an id from teams-list-team.
@@ -18,7 +18,7 @@ function graphFault(status, body, retryAfter) {
                 detail: {
                     neededScope: null,
                     graphMessage: message || null,
-                    fix: "grant the delegated permission at https://portal.azure.com → Entra ID → App registrations → your app → API permissions (admin-consent if required), then re-authenticate (doax auth set @doax/teams-login)",
+                    fix: "grant the delegated permission at https://portal.azure.com → Entra ID → App registrations → your app → API permissions (admin-consent if required), then re-authenticate (doax auth set @teams/login)",
                 },
             });
         }
@@ -33,7 +33,7 @@ function graphFault(status, body, retryAfter) {
         return Object.assign(new Error(`not-found: ${code ?? "team or channel id not found"}`), {
             faultClass: "not-found",
             graphError: code,
-            detail: { fix: "check the team and channel ids (@doax/teams-list-team, @doax/teams-list-channel)" },
+            detail: { fix: "check the team and channel ids (@teams/list-team, @teams/list-channel)" },
         });
     }
     if (status >= 500) return Object.assign(new Error(`graph-unavailable: HTTP ${status}`), { faultClass: "graph-unavailable" });
@@ -69,7 +69,7 @@ const RECORD_SCHEMA = {
 
 export function describe() {
     return {
-        identity: "@doax/teams-list-channel",
+        identity: "@teams/list-channel",
         kind: "data-source",
         collection: "channels of one Microsoft Team visible to the caller",
         readParams: {

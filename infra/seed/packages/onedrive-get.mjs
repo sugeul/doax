@@ -1,8 +1,8 @@
 /**
-  * @doax/onedrive-get — data-source (spec §5).
+  * @onedrive/get — data-source (spec §5).
   * One collection of one record: a single OneDrive item, via GET /me/drive/items/{itemId}.
   * With media:true it also returns the file bytes (base64), via /items/{itemId}/content.
-  * The `itemId` comes from @doax/onedrive-list (its `id`) or @doax/onedrive-changes (its `id`).
+  * The `itemId` comes from @onedrive/list (its `id`) or @onedrive/changes (its `id`).
   * Caller-relative (§5.3): resolves only if the Files.Read token may see the item.
   */
 
@@ -20,13 +20,13 @@ function graphFault(status, body, retryAfter) {
         if (code === "Authorization_RequestDenied" || /scope|permission|consent/i.test(message)) {
             return Object.assign(new Error("missing-scope: the signed-in app lacks a required Microsoft Graph permission"), {
                 faultClass: "missing-scope",
-                detail: { neededScope: "Files.Read", graphMessage: message || null, fix: "re-consent at https://auth.doax.io?appid=@doax/onedrive-login, then re-authenticate (doax auth set @doax/onedrive-login)" },
+                detail: { neededScope: "Files.Read", graphMessage: message || null, fix: "re-consent at https://auth.doax.io?appid=@onedrive/login, then re-authenticate (doax auth set @onedrive/login)" },
             });
         }
         return Object.assign(new Error(`access-denied: ${code ?? "forbidden"}`), { faultClass: "access-denied", graphError: code });
     }
     if (status === 429) return Object.assign(new Error("rate-limited: Microsoft Graph throttled the request"), { faultClass: "rate-limited", retryAfter: retryAfter ?? null });
-    if (status === 404) return Object.assign(new Error(`not-found: ${code ?? "item not found or not visible to this caller"}`), { faultClass: "not-found", graphError: code, detail: { fix: "check the itemId (@doax/onedrive-list) and that the token may see it" } });
+    if (status === 404) return Object.assign(new Error(`not-found: ${code ?? "item not found or not visible to this caller"}`), { faultClass: "not-found", graphError: code, detail: { fix: "check the itemId (@onedrive/list) and that the token may see it" } });
     if (status >= 500) return Object.assign(new Error(`graph-unavailable: HTTP ${status}`), { faultClass: "graph-unavailable" });
     return Object.assign(new Error(`graph-error: ${code ?? status}`), { faultClass: "graph-error", graphError: code });
 }
@@ -100,7 +100,7 @@ const RECORD_SCHEMA = {
 
 export function describe() {
     return {
-        identity: "@doax/onedrive-get",
+        identity: "@onedrive/get",
         kind: "data-source",
         collection: "a single OneDrive item",
         readParams: {
@@ -143,7 +143,7 @@ export async function read(input, context) {
         if (i.folder) {
             throw Object.assign(new Error("access-denied: a folder has no downloadable content"), {
                 faultClass: "access-denied",
-                detail: { fix: "list a folder's children with @doax/onedrive-list; media is for files only" },
+                detail: { fix: "list a folder's children with @onedrive/list; media is for files only" },
             });
         }
         if (i.size && Number(i.size) > MAX_CONTENT_BYTES) {

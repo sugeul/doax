@@ -1,5 +1,5 @@
 /**
-  * @doax/slack-search — data-source (spec §5).
+  * @slack/search — data-source (spec §5).
   * One collection: Slack messages matching a full-text query, via search.messages.
   * Unlike the other Slack resources, search.messages requires a *user* token (xoxp-):
   * a bot token (xoxb-) is rejected by Slack with not_allowed_token_type. The query
@@ -20,14 +20,14 @@ async function slack(method, token, params = {}) {
                 detail: {
                     neededScope: body.needed ?? null,
                     providedScopes: body.provided ?? null,
-                    fix: "search.messages needs the search:read scope on a user token; add it at https://api.slack.com/apps → OAuth & Permissions → User Token Scopes, reinstall, then re-authenticate (doax auth set @doax/slack-login)",
+                    fix: "search.messages needs the search:read scope on a user token; add it at https://api.slack.com/apps → OAuth & Permissions → User Token Scopes, reinstall, then re-authenticate (doax auth set @slack/login)",
                 },
             });
         }
         if (body.error === "not_allowed_token_type") {
             throw Object.assign(new Error("invalid-auth: search.messages requires a Slack user token (xoxp-), not a bot token (xoxb-)"), {
                 faultClass: "invalid-auth",
-                detail: { fix: "authenticate with a user token: doax auth set @doax/slack-login --secret xoxp-..." },
+                detail: { fix: "authenticate with a user token: doax auth set @slack/login --secret xoxp-..." },
             });
         }
         const faultClass = body.error === "invalid_auth" || body.error === "token_revoked" ? "invalid-auth"
@@ -53,7 +53,7 @@ const RECORD_SCHEMA = {
 
 export function describe() {
     return {
-        identity: "@doax/slack-search",
+        identity: "@slack/search",
         kind: "data-source",
         collection: "slack messages matching a full-text query, visible to the caller",
         readParams: { query: "search query (required)", count: "max records per page, default 20", page: "1-based page number, default 1" },

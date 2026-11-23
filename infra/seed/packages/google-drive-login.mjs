@@ -1,12 +1,12 @@
 /**
-  * @doax/google-drive-login — authenticator for the Google Drive API (spec §4.7).
+  * @gdrive/login — authenticator for the Google Drive API (spec §4.7).
   * Subject: personal. Interaction: secret-entry (a Google OAuth refresh token).
   *
   * A user mints a refresh token once at https://auth.doax.io (the consent-redirect mirror),
   * stores it (e.g. in .env), and pastes it here. This module exchanges that refresh token for
   * a short-lived access token using the OAuth *client* (client_id/client_secret) that it reads
   * from AWS Secrets Manager via the local aws-cli — the client is operator-held and never the
-  * caller's to enter. The access token is what every @doax/google-drive-* data-source consumes
+  * caller's to enter. The access token is what every @gdrive/* data-source consumes
   * as context.credential.token; `refresh` mints a fresh one from the same refresh token.
   *
   * The scope the refresh token already carries is https://www.googleapis.com/auth/drive.readonly;
@@ -25,7 +25,7 @@ const REGION = "ap-northeast-2";
 const AWS_PROFILE = "doax";
 const SCOPE = "https://www.googleapis.com/auth/drive.readonly";
 // The refresh-token mirror, parameterized by this authenticator's identity.
-const AUTH_URL = "https://auth.doax.io?appid=@doax/google-drive-login";
+const AUTH_URL = "https://auth.doax.io?appid=@gdrive/login";
 
 function driveFault(status, body, retryAfter) {
     const err = body?.error;
@@ -49,7 +49,7 @@ function driveFault(status, body, retryAfter) {
                 detail: {
                     neededScope: SCOPE,
                     driveMessage: message || null,
-                    fix: `re-consent at ${AUTH_URL} so the token carries drive.readonly, then re-authenticate (doax auth set @doax/google-drive-login --secret <refresh-token>)`,
+                    fix: `re-consent at ${AUTH_URL} so the token carries drive.readonly, then re-authenticate (doax auth set @gdrive/login --secret <refresh-token>)`,
                 },
             });
         }
@@ -113,7 +113,7 @@ async function exchangeRefresh(client, refreshToken) {
         // invalid_grant: the refresh token is expired, revoked, or wrong.
         throw Object.assign(new Error(`invalid-auth: refresh failed (${body.error ?? res.status})`), {
             faultClass: "invalid-auth",
-            detail: { fix: `re-mint a refresh token at ${AUTH_URL} and re-authenticate (doax auth set @doax/google-drive-login --secret <refresh-token>)` },
+            detail: { fix: `re-mint a refresh token at ${AUTH_URL} and re-authenticate (doax auth set @gdrive/login --secret <refresh-token>)` },
         });
     }
     return body; // { access_token, expires_in, scope, token_type }
@@ -142,7 +142,7 @@ function lifetimeOf(cred) {
 
 export function describe() {
     return {
-        identity: "@doax/google-drive-login",
+        identity: "@gdrive/login",
         kind: "authenticator",
         subject: "personal",
         interaction: "secret-entry",
@@ -169,7 +169,7 @@ export async function authenticate(input, context) {
     if (!refreshToken) {
         throw Object.assign(new Error(`invalid-auth: mode ${mode} has no refresh token to work with`), {
             faultClass: "invalid-auth",
-            detail: { fix: `open ${AUTH_URL} to mint one, then: doax auth set @doax/google-drive-login --secret <refresh-token>` },
+            detail: { fix: `open ${AUTH_URL} to mint one, then: doax auth set @gdrive/login --secret <refresh-token>` },
         });
     }
 

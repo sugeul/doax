@@ -1,5 +1,5 @@
 /**
-  * @doax/google-drive-changes — data-source (spec §5).
+  * @gdrive/changes — data-source (spec §5).
   * One collection: the change feed for the caller's Drive, via GET /drive/v3/changes — the
   * "delta list". With no cursor, read() bootstraps a baseline token (GET /changes/startPageToken)
   * and lists from it; thereafter the caller polls with the `cursor` returned as `nextDeltaToken`.
@@ -30,7 +30,7 @@ function driveFault(status, body, retryAfter) {
         if (reason === "insufficientPermissions" || /insufficient.*scope/i.test(message)) {
             return Object.assign(new Error("missing-scope: the token lacks the Drive scope this operation needs"), {
                 faultClass: "missing-scope",
-                detail: { neededScope: "https://www.googleapis.com/auth/drive.readonly", driveMessage: message || null, fix: "re-consent at https://auth.doax.io?appid=@doax/google-drive-login, then re-authenticate (doax auth set @doax/google-drive-login)" },
+                detail: { neededScope: "https://www.googleapis.com/auth/drive.readonly", driveMessage: message || null, fix: "re-consent at https://auth.doax.io?appid=@gdrive/login, then re-authenticate (doax auth set @gdrive/login)" },
             });
         }
         return Object.assign(new Error(`access-denied: ${reason ?? "forbidden"}`), { faultClass: "access-denied", driveError: reason });
@@ -75,7 +75,7 @@ const RECORD_SCHEMA = {
 
 export function describe() {
     return {
-        identity: "@doax/google-drive-changes",
+        identity: "@gdrive/changes",
         kind: "data-source",
         collection: "the change feed (delta) for the caller's Drive",
         readParams: {

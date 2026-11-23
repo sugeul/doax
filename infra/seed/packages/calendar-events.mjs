@@ -1,5 +1,5 @@
 /**
-  * @doax/calendar-events — data-source (spec §5).
+  * @gmail/calendar-events — data-source (spec §5).
   * One collection: the events of one calendar, via events.list — list AND delta in one resource.
   * A first read (optionally windowed by timeMin/timeMax) returns a page of events and, at the end,
   * a sync token; thereafter the caller polls with that token via `cursor` for incremental changes.
@@ -10,7 +10,7 @@
   */
 
 const BASE = "https://www.googleapis.com/calendar/v3";
-const AUTH_URL = "https://auth.doax.io?appid=@doax/gmail-login";
+const AUTH_URL = "https://auth.doax.io?appid=@gmail/login";
 
 function googleFault(status, body, retryAfter) {
     const err = body?.error;
@@ -20,13 +20,13 @@ function googleFault(status, body, retryAfter) {
     if (status === 403) {
         if (reason === "accessNotConfigured" || /accessNotConfigured|has not been used in project|is disabled/i.test(message)) return Object.assign(new Error("access-denied: the Calendar API is not enabled for this OAuth client's project"), { faultClass: "access-denied", googleError: reason, detail: { fix: "enable the Calendar API in the doax-adapter-gmail project, then retry" } });
         if (reason === "rateLimitExceeded" || reason === "userRateLimitExceeded") return Object.assign(new Error("rate-limited: Calendar throttled the request"), { faultClass: "rate-limited", retryAfter: retryAfter ?? null });
-        if (reason === "insufficientPermissions" || /insufficient.*scope/i.test(message)) return Object.assign(new Error("missing-scope: the token lacks calendar.readonly"), { faultClass: "missing-scope", detail: { neededScope: "https://www.googleapis.com/auth/calendar.readonly", fix: `re-consent at ${AUTH_URL}, then re-authenticate (doax auth set @doax/gmail-login)` } });
+        if (reason === "insufficientPermissions" || /insufficient.*scope/i.test(message)) return Object.assign(new Error("missing-scope: the token lacks calendar.readonly"), { faultClass: "missing-scope", detail: { neededScope: "https://www.googleapis.com/auth/calendar.readonly", fix: `re-consent at ${AUTH_URL}, then re-authenticate (doax auth set @gmail/login)` } });
         return Object.assign(new Error(`access-denied: ${reason ?? "forbidden"}`), { faultClass: "access-denied", googleError: reason });
     }
     if (status === 429) return Object.assign(new Error("rate-limited: Calendar throttled the request"), { faultClass: "rate-limited", retryAfter: retryAfter ?? null });
     // 410 Gone: the syncToken is no longer valid; a full resync is required.
     if (status === 410) return Object.assign(new Error("not-found: the sync token is no longer valid (resync required)"), { faultClass: "not-found", googleError: reason, detail: { fix: "read with no cursor (optionally timeMin/timeMax) to resync, then poll with the new nextDeltaToken" } });
-    if (status === 404) return Object.assign(new Error(`not-found: ${reason ?? "calendar not found"}`), { faultClass: "not-found", googleError: reason, detail: { fix: "check the calendarId (@doax/calendar-list)" } });
+    if (status === 404) return Object.assign(new Error(`not-found: ${reason ?? "calendar not found"}`), { faultClass: "not-found", googleError: reason, detail: { fix: "check the calendarId (@gmail/calendar-list)" } });
     if (status >= 500) return Object.assign(new Error(`google-unavailable: HTTP ${status}`), { faultClass: "google-unavailable" });
     return Object.assign(new Error(`google-error: ${reason ?? status}`), { faultClass: "google-error", googleError: reason });
 }
@@ -49,7 +49,7 @@ async function google(path, token, params) {
 const RECORD_SCHEMA = {
     type: "object",
     properties: {
-        id: { type: "string", description: "event id — the `eventId` parameter of @doax/calendar-event-get" },
+        id: { type: "string", description: "event id — the `eventId` parameter of @gmail/calendar-event-get" },
         status: { type: ["string", "null"], description: "confirmed | tentative | cancelled (cancelled appears in delta reads)" },
         summary: { type: ["string", "null"] },
         description: { type: ["string", "null"] },
@@ -67,7 +67,7 @@ const RECORD_SCHEMA = {
 
 export function describe() {
     return {
-        identity: "@doax/calendar-events",
+        identity: "@gmail/calendar-events",
         kind: "data-source",
         collection: "the events of one calendar",
         readParams: {

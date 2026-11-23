@@ -1,5 +1,5 @@
 /**
-  * @doax/slack-list-channel — data-source (spec §5).
+  * @slack/list-channel — data-source (spec §5).
   * One collection: the Slack channels visible to the caller's token, via conversations.list.
   * The natural first read: it yields the channel ids that slack-channel-history and
   * slack-post take as their `channel` parameter.
@@ -19,7 +19,7 @@ async function slack(method, token, params = {}) {
                 detail: {
                     neededScope: body.needed ?? null,
                     providedScopes: body.provided ?? null,
-                    fix: "add the scope at https://api.slack.com/apps → your app → OAuth & Permissions → Bot Token Scopes, reinstall the app, then retry (doax auth set @doax/slack-login --secret ... if the token rotated)",
+                    fix: "add the scope at https://api.slack.com/apps → your app → OAuth & Permissions → Bot Token Scopes, reinstall the app, then retry (doax auth set @slack/login --secret ... if the token rotated)",
                 },
             });
         }
@@ -45,7 +45,7 @@ const RECORD_SCHEMA = {
 
 export function describe() {
     return {
-        identity: "@doax/slack-list-channel",
+        identity: "@slack/list-channel",
         kind: "data-source",
         collection: "slack channels visible to the caller",
         readParams: {
