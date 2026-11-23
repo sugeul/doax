@@ -52,6 +52,8 @@ Usage:
     doax app deploy <@ns> <dir>               Deploy a static doax-app to the registry's app host
     doax publish <manifest.json> <package-file>  Publish a resource (identity comes from the manifest;
                                               @global accepts anyone logged in, other namespaces need a role)
+    doax yank <@ns/name[@version]>            Take a resource down (§4.4): drop it from search and latest;
+                                              explicit versions still resolve. Needs owner/publisher (or operator)
     doax login [--email <you@x>] [--code <6 digits>] [--token <pat>] [--registry <url>]
     doax login --web [--registry <url>] [--no-browser] [--timeout <seconds>]
                                               Sign in: email gets a code, code gets a token; store a token directly; or
@@ -206,6 +208,8 @@ export async function run(argv: string[], deps: CliDeps = defaultDeps()): Promis
                 return await auditCmd(deps, values, json);
             case "publish":
                 return await publishCmd(deps, rest, json);
+            case "yank":
+                return await yankCmd(deps, rest[0], json);
             case "app":
                 return await appCmd(deps, rest, json);
             case "login":
@@ -350,6 +354,21 @@ async function publishCmd(deps: CliDeps, rest: string[], json: boolean): Promise
         exitCode: 0,
         stdout: json ? JSON.stringify({ ok: true, ...body }) : `published ${body.published}\n  digest ${body.digest}\n  at ${origin}${minted}`,
     };
+}
+
+/** Yank a resource (spec §4.4): DELETE to the registry that owns its namespace; drops it from search and latest. */
+async function yankCmd(deps: CliDeps, refInput: string | undefined, json: boolean): Promise<CliResult> {
+    if (!refInput) return { exitCode: 2, stderr: "doax yank: expected <@ns/name[@version]>" };
+    const parsed = parseResourceRef(refInput);
+    const xdeps = executorDeps(deps);
+    const origin = registryFor(xdeps, parsed.namespace);
+    const auth = authHeaders(xdeps, origin);
+    if (!auth.authorization) return { exitCode: 1, stderr: `doax yank: not logged in to ${origin}; run doax login` };
+    const res = await deps.fetch(`${origin}/${formatResourceRef(parsed)}`, { method: "DELETE", headers: auth });
+    const body = (await res.json()) as { yanked?: string[]; error?: string };
+    if (!res.ok) return { exitCode: 1, stderr: json ? JSON.stringify({ ok: false, error: body.error ?? res.status }) : `doax yank: ${body.error ?? res.status}` };
+    if (json) return { exitCode: 0, stdout: JSON.stringify({ ok: true, yanked: body.yanked ?? [] }) };
+    return { exitCode: 0, stdout: (body.yanked ?? []).map((id) => `yanked ${id}`).join("\n") || "nothing to yank" };
 }
 
 /**
