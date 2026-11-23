@@ -216,7 +216,7 @@ The Executor CLI cannot run an authentication flow it does not understand. There
 |---|---|
 | Target system | The external system these credentials are for, named so that reviewers can see which Resources ought to share this Authenticator. |
 | Subject | `personal`, `organization`, or `machine` (above). |
-| Interaction kind | One or more of: `none`, `browser-login` (the Executor CLI opens a URL and waits for completion), `consent-redirect` (a third-party consent screen returning to a callback the Executor CLI controls), `device-code` (the Executor CLI displays a code the user enters elsewhere), `secret-entry` (the user supplies a token or key directly). Several kinds MAY be declared in order of preference. `browser-login` is forbidden for subject `organization` and `machine`. |
+| Interaction kind | One or more of: `none`, `browser-login` (the Executor CLI opens a URL and waits for completion), `poll-login` (the Executor CLI opens a login URL and collects the result by re-invoking `authenticate`, rather than holding the connection open — §4.7.1a), `consent-redirect` (a third-party consent screen returning to a callback the Executor CLI controls), `device-code` (the Executor CLI displays a code the user enters elsewhere), `secret-entry` (the user supplies a token or key directly). Several kinds MAY be declared in order of preference. `browser-login` is forbidden for subject `organization` and `machine`. |
 | Interaction details | For each declared kind: the entry point the Executor CLI must open or display, the completion signal it must watch for, and the maximum time to wait. |
 | Credential material | What the flow produces (an opaque session, a bearer token, a cookie set, a key pair), named so the Executor CLI can store it and hand it to referencing Resources. The Manifest MUST NOT contain actual credential values. |
 | Lifetime | Declared validity period of the credential material, or `unknown`. Whether it can be refreshed without user interaction, and if so how `refresh` mode behaves. |
@@ -232,6 +232,18 @@ Requirements:
 - The Executor CLI MUST use only the interaction kinds declared; an Authenticator MUST NOT request an undeclared interaction at run time.
 - Verification review (§4.5) of an Authenticator assesses `scope requested` against the operations of the Resources that reference it. An Authenticator whose scopes are broader than any referencing Resource needs SHOULD NOT receive `verified` status, and a Resource SHOULD NOT receive `verified` status while referencing an unverified Authenticator.
 - The specification is descriptive of the flow, not an implementation of it.
+
+#### 4.7.1a `poll-login`: web login without copying a token
+
+`poll-login` is the non-blocking counterpart to `browser-login`, for an Executor that cannot hold a connection open for the duration of a web login — for example a request/response surface such as an MCP gateway, where the caller re-invokes the operation to collect the result. It lets a user sign in through a web page instead of copying a token, while reusing the same `authenticate` endpoint.
+
+In `poll-login`, `authenticate` in mode `initial` or `step-up` MAY return a **pending** result — the entry point to open and an opaque continuation handle — instead of credential material. The Executor CLI opens the entry point (a terminal prints or launches the login URL; a web surface returns it to the caller), and then calls `authenticate` again, in the same mode, carrying the handle. The Authenticator returns the credential material once the web login has completed, or a pending result again until the declared maximum wait elapses, after which it MUST fail rather than return pending indefinitely. A pending result carries no credential material and is not itself a credential.
+
+The interaction details for `poll-login` MUST give the entry point, the poll interval, and the maximum wait. The `auth` audit event (§8.3) is produced on the terminal outcome (credential issued, declined, or timed out), not on each intervening poll.
+
+An Authenticator MAY declare both `secret-entry` and `poll-login`; the caller then chooses between supplying a token directly and signing in through the web page. The credential material produced, its lifetime, verification, and everything downstream are identical whichever the caller chooses.
+
+The web login `poll-login` performs is the target system's own (for example a Google SSO the target trusts): the Authenticator uses that sign-in to establish the user's identity, decides whether the user is authorized, and issues its own credential material for the target. That credential is distinct from any Registry token and from the identity token consumed during sign-in (§7.2 audience rules); `poll-login` does not exchange one for another.
 
 ---
 
