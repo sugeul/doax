@@ -921,6 +921,37 @@ app.put("/:ns{@[a-z0-9._-]+}/:namever", async (c) => {
     );
 });
 
+// Take down a published resource (spec §4.4, §10): yank it. The immutable bytes stay — yanked versions
+// drop from search and "latest" resolution but still resolve by explicit version so audit stays
+// reproducible. DELETE @ns/name yanks every version; DELETE @ns/name@version yanks one.
+app.delete("/:ns{@[a-z0-9._-]+}/:namever", async (c) => {
+    const identity = `${c.req.param("ns")}/${c.req.param("namever")}`;
+    const match = IDENTITY.exec(identity);
+    if (!match) return c.json(withManifesto(DOMAIN, { error: `yank needs @ns/name[@version], got ${identity}` }), 400);
+    const [, namespace, name, version] = match;
+
+    await ensureSchema();
+    const admin = isAdmin(c);
+    const principal = admin ? null : await principalFrom(c);
+    if (!admin) {
+        if (!principal) return c.json(withManifesto(DOMAIN, { error: "yank requires a Bearer token (or operator token)" }), 401);
+        const owns = SHARED_NAMESPACES.has(`@${namespace}`)
+            ? (await db!.query(`SELECT 1 FROM manifests WHERE namespace = $1 AND name = $2 AND published_by = $3 LIMIT 1`, [namespace, name, principal])).rows.length > 0
+            : await hasRole(principal, namespace!, ["owner", "publisher"]);
+        if (!owns) return c.json(withManifesto(DOMAIN, { error: `${principal} may not yank @${namespace}/${name}` }), 403);
+    }
+    const actor = admin ? BY_OPERATOR : byToken(principal);
+
+    const res = version
+        ? await db!.query(`UPDATE manifests SET lifecycle = 'yanked' WHERE namespace = $1 AND name = $2 AND version = $3 AND lifecycle <> 'yanked' RETURNING version`, [namespace, name, version])
+        : await db!.query(`UPDATE manifests SET lifecycle = 'yanked' WHERE namespace = $1 AND name = $2 AND lifecycle <> 'yanked' RETURNING version`, [namespace, name]);
+    if (res.rowCount === 0) return c.json(withManifesto(DOMAIN, { error: `no active version of @${namespace}/${name}${version ? `@${version}` : ""} to yank` }), 404);
+
+    const yanked = res.rows.map((r) => `@${namespace}/${name}@${r.version}`);
+    await appendAudit(yanked.map((id) => registryEvent("yank", id, actor)));
+    return c.json(withManifesto(DOMAIN, { yanked }));
+});
+
 /*
  * doax-app hosting (app.doax.io/<ns>/): deploy a static bundle for a namespace. Same role
  * gate as publish — owner/publisher of the namespace. Static files only, size-capped,
