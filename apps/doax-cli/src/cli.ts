@@ -143,6 +143,7 @@ const executorDeps = (deps: CliDeps): ExecutorDeps => ({
     fetch: deps.fetch,
     home: deps.home ?? join(homedir(), ".doax"),
     prompt: deps.prompt,
+    openUrl: deps.openUrl,
 });
 
 /** Runs the CLI against argv (without the node and script entries) and returns what to print. */
@@ -754,6 +755,81 @@ async function acquireCredential(deps: ExecutorDeps, authResolved: ResolvedResou
 }
 
 /**
+  * Browser-login for an Authenticator (§4.7.1): open its login URL with a loopback callback and catch the
+  * secret the page posts back (GET ?secret=&state= or a form POST), so nothing is copied by hand. The page
+  * must redirect to the callback with the value; `state` (32 CSPRNG bytes) binds the response to this run.
+  */
+async function browserLoginSecret(deps: ExecutorDeps, authResolved: ResolvedResource): Promise<string> {
+    const { createServer } = await import("node:http");
+    const { randomBytes } = await import("node:crypto");
+    const spec = authResolved.manifest.authentication as { interactionDetails?: Record<string, { entryPoint?: string }> } | undefined;
+    const entryPoint = spec?.interactionDetails?.["browser-login"]?.entryPoint;
+    if (!entryPoint) throw new ExecutorError(`${authResolved.identity} declares browser-login but no entry point`, "unsupported");
+
+    const state = randomBytes(32).toString("base64url");
+    const path = `/${randomBytes(16).toString("hex")}`;
+    const timeoutMs = 300_000;
+
+    return await new Promise<string>((resolve, reject) => {
+        const server = createServer((req, res) => {
+            const url = new URL(req.url ?? "/", "http://127.0.0.1");
+            if (url.pathname !== path) {
+                res.writeHead(404).end();
+                return;
+            }
+            const settle = (got: string | null, st: string | null) => {
+                if (st !== state || !got) {
+                    res.writeHead(400).end("bad request");
+                    return;
+                }
+                res.writeHead(200, { "content-type": "text/html" }).end("<!doctype html><p>Signed in to doax. You can close this tab.</p>");
+                cleanup();
+                resolve(got);
+            };
+            if (req.method === "GET") {
+                settle(url.searchParams.get("secret"), url.searchParams.get("state"));
+                return;
+            }
+            let raw = "";
+            req.on("data", (chunk) => {
+                raw += chunk;
+                if (raw.length > 8192) req.destroy();
+            });
+            req.on("end", () => {
+                const form = new URLSearchParams(raw);
+                settle(form.get("secret"), form.get("state"));
+            });
+        });
+        const timer = setTimeout(() => {
+            cleanup();
+            reject(new ExecutorError(`browser login for ${authResolved.identity} timed out after ${Math.round(timeoutMs / 1000)}s`, "timeout"));
+        }, timeoutMs);
+        function cleanup() {
+            clearTimeout(timer);
+            server.close();
+        }
+        server.on("error", (err) => {
+            cleanup();
+            reject(new ExecutorError(`browser-login listener failed: ${err.message}`, "io"));
+        });
+        server.listen(0, "127.0.0.1", async () => {
+            const addr = server.address() as { port: number };
+            const callback = `http://127.0.0.1:${addr.port}${path}`;
+            const sep = entryPoint.includes("?") ? "&" : "?";
+            const loginUrl = `${entryPoint}${sep}callback=${encodeURIComponent(callback)}&state=${encodeURIComponent(state)}`;
+            process.stderr.write(`opening ${loginUrl}\n`);
+            if (deps.openUrl) {
+                try {
+                    await deps.openUrl(loginUrl);
+                } catch {
+                    /* no browser — the printed URL is the fallback */
+                }
+            }
+        });
+    });
+}
+
+/**
   * Resolve the resource's Authenticator, its cached credential, and the effective tier
   * (§9.1 steps 4-5). No pre-auth is required: when nothing is cached and the session is
   * interactive, the auth flow runs inline, in context, and the operation continues.
@@ -769,8 +845,8 @@ async function credentialFor(deps: ExecutorDeps, resolved: ResolvedResource, inl
         entry = await acquireCredential(deps, authResolved, inlineSecret);
     }
     if (!entry) {
+        const auth = authResolved.manifest.authentication as { interactionKinds?: string[]; interactionDetails?: Record<string, unknown> } | undefined;
         if (!deps.prompt) {
-            const auth = authResolved.manifest.authentication as { interactionDetails?: Record<string, unknown> } | undefined;
             throw new ExecutorError(`no cached credential for ${authRef}`, "credential-missing", {
                 willRequireInteraction: true,
                 authenticator: authResolved.identity,
@@ -778,8 +854,13 @@ async function credentialFor(deps: ExecutorDeps, resolved: ResolvedResource, inl
                 fix: `re-run with --secret <value>, or: doax auth set ${String(authRef)} --secret <value>`,
             });
         }
-        const secret = (await deps.prompt(`${resolved.identity} needs ${authRef}\n${secretPrompt(authResolved)}`)).trim();
-        if (!secret) throw new ExecutorError("no secret entered", "credential-missing");
+        let secret: string;
+        if (auth?.interactionKinds?.includes("browser-login") && deps.openUrl) {
+            secret = await browserLoginSecret(deps, authResolved);
+        } else {
+            secret = (await deps.prompt(`${resolved.identity} needs ${authRef}\n${secretPrompt(authResolved)}`)).trim();
+            if (!secret) throw new ExecutorError("no secret entered", "credential-missing");
+        }
         entry = await acquireCredential(deps, authResolved, secret);
     }
     return { credential: entry.credential, authenticator: String(authRef), effective };

@@ -135,6 +135,8 @@ export interface ExecutorDeps {
     home: string;
     /** Collects a secret or confirmation from the user; absent in non-interactive runs. */
     prompt?: (question: string) => Promise<string>;
+    /** Opens a URL in the caller's browser (for an Authenticator's browser-login); absent leaves the printed URL. */
+    openUrl?: (url: string) => void | Promise<void>;
 }
 
 export class ExecutorError extends Error {
