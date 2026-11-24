@@ -18,11 +18,11 @@ if (!bearer && !admin) {
 }
 
 const OWNER = "doax.io operators <registry@doax.io>";
-const AUTHENTICATOR = "@slack/login@1.0.0";
-const TEAMS_AUTHENTICATOR = "@teams/login@1.0.0";
-const DRIVE_AUTHENTICATOR = "@gdrive/login@1.0.0";
-const ONEDRIVE_AUTHENTICATOR = "@onedrive/login@1.0.0";
-const GMAIL_AUTHENTICATOR = "@gmail/login@1.0.0";
+const AUTHENTICATOR = "@slack/login@1.0.1";
+const TEAMS_AUTHENTICATOR = "@teams/login@1.0.1";
+const DRIVE_AUTHENTICATOR = "@gdrive/login@1.0.1";
+const ONEDRIVE_AUTHENTICATOR = "@onedrive/login@1.0.1";
+const GMAIL_AUTHENTICATOR = "@gmail/login@1.0.1";
 
 const slackFaults = (extra = []) => [
     {
@@ -255,6 +255,7 @@ const RESOURCES = [
                 lifetime: { period: "unknown", refreshable: false },
                 verificationMethod: "auth.test (no side effects)",
                 stepUpBehavior: "same as initial",
+                authorizationEnforcement: "none",
                 requiredInputs: ["secret"],
                 scopeRequested: "whatever the pasted token already carries; this flow requests no new scopes",
                 revocation: "revoke the token in Slack: workspace admin > installed apps, or https://api.slack.com/apps",
@@ -270,7 +271,7 @@ const RESOURCES = [
         },
     },
     {
-        identity: "@slack/channel-history@1.0.0",
+        identity: "@slack/channel-history@1.0.1",
         file: "slack-channel-history.mjs",
         manifest: {
             kind: "data-source",
@@ -299,7 +300,7 @@ const RESOURCES = [
         },
     },
     {
-        identity: "@slack/list-channel@1.0.0",
+        identity: "@slack/list-channel@1.0.1",
         file: "slack-list-channel.mjs",
         manifest: {
             kind: "data-source",
@@ -328,7 +329,7 @@ const RESOURCES = [
         },
     },
     {
-        identity: "@slack/post@1.0.0",
+        identity: "@slack/post@1.0.1",
         file: "slack-post.mjs",
         manifest: {
             kind: "action",
@@ -369,7 +370,7 @@ const RESOURCES = [
         },
     },
     {
-        identity: "@slack/search@1.0.0",
+        identity: "@slack/search@1.0.1",
         file: "slack-search.mjs",
         manifest: {
             kind: "data-source",
@@ -434,6 +435,7 @@ const RESOURCES = [
                 },
                 verificationMethod: "GET /me (no side effects)",
                 stepUpBehavior: "same as initial (repeat the device-code login)",
+                authorizationEnforcement: "none",
                 requiredInputs: [],
                 scopeRequested: "offline_access User.Read Team.ReadBasic.All Channel.ReadBasic.All ChannelMessage.Read.All ChannelMessage.Send",
                 revocation:
@@ -450,7 +452,7 @@ const RESOURCES = [
         },
     },
     {
-        identity: "@teams/list-team@1.0.0",
+        identity: "@teams/list-team@1.0.1",
         file: "teams-list-team.mjs",
         manifest: {
             kind: "data-source",
@@ -479,7 +481,7 @@ const RESOURCES = [
         },
     },
     {
-        identity: "@teams/list-channel@1.0.0",
+        identity: "@teams/list-channel@1.0.1",
         file: "teams-list-channel.mjs",
         manifest: {
             kind: "data-source",
@@ -508,7 +510,7 @@ const RESOURCES = [
         },
     },
     {
-        identity: "@teams/channel-messages@1.0.0",
+        identity: "@teams/channel-messages@1.0.1",
         file: "teams-channel-messages.mjs",
         manifest: {
             kind: "data-source",
@@ -537,7 +539,7 @@ const RESOURCES = [
         },
     },
     {
-        identity: "@teams/post@1.0.0",
+        identity: "@teams/post@1.0.1",
         file: "teams-post.mjs",
         manifest: {
             kind: "action",
@@ -569,7 +571,7 @@ const RESOURCES = [
         },
     },
     {
-        identity: "@teams/search@1.0.0",
+        identity: "@teams/search@1.0.1",
         file: "teams-search.mjs",
         manifest: {
             kind: "data-source",
@@ -631,6 +633,7 @@ const RESOURCES = [
                 },
                 verificationMethod: "GET drive/v3/about?fields=user (no side effects)",
                 stepUpBehavior: "same as initial (re-paste the refresh token)",
+                authorizationEnforcement: "none",
                 requiredInputs: ["secret"],
                 scopeRequested: "whatever the pasted refresh token already carries (expected: https://www.googleapis.com/auth/drive.readonly); this flow requests no new scopes",
                 revocation: "revoke the app's access at https://myaccount.google.com/permissions",
@@ -646,7 +649,7 @@ const RESOURCES = [
         },
     },
     {
-        identity: "@gdrive/list@1.0.0",
+        identity: "@gdrive/list@1.0.1",
         file: "google-drive-list.mjs",
         manifest: {
             kind: "data-source",
@@ -675,7 +678,7 @@ const RESOURCES = [
         },
     },
     {
-        identity: "@gdrive/changes@1.0.0",
+        identity: "@gdrive/changes@1.0.1",
         file: "google-drive-changes.mjs",
         manifest: {
             kind: "data-source",
@@ -704,7 +707,7 @@ const RESOURCES = [
         },
     },
     {
-        identity: "@gdrive/get@1.0.0",
+        identity: "@gdrive/get@1.0.1",
         file: "google-drive-get.mjs",
         manifest: {
             kind: "data-source",
@@ -766,6 +769,7 @@ const RESOURCES = [
                 },
                 verificationMethod: "GET /me (no side effects)",
                 stepUpBehavior: "same as initial (re-paste the refresh token)",
+                authorizationEnforcement: "none",
                 requiredInputs: ["secret"],
                 scopeRequested: "whatever the pasted refresh token already carries (expected: offline_access Files.Read User.Read); this flow requests no new scopes",
                 revocation: "revoke the app's access at https://account.live.com/consent/Manage (personal) or via your tenant's Entra ID (work/school)",
@@ -781,7 +785,7 @@ const RESOURCES = [
         },
     },
     {
-        identity: "@onedrive/list@1.0.0",
+        identity: "@onedrive/list@1.0.1",
         file: "onedrive-list.mjs",
         manifest: {
             kind: "data-source",
@@ -810,7 +814,7 @@ const RESOURCES = [
         },
     },
     {
-        identity: "@onedrive/changes@1.0.0",
+        identity: "@onedrive/changes@1.0.1",
         file: "onedrive-changes.mjs",
         manifest: {
             kind: "data-source",
@@ -839,7 +843,7 @@ const RESOURCES = [
         },
     },
     {
-        identity: "@onedrive/get@1.0.0",
+        identity: "@onedrive/get@1.0.1",
         file: "onedrive-get.mjs",
         manifest: {
             kind: "data-source",
@@ -901,6 +905,7 @@ const RESOURCES = [
                 },
                 verificationMethod: "GET https://www.googleapis.com/oauth2/v3/userinfo (no side effects)",
                 stepUpBehavior: "same as initial (re-paste the refresh token)",
+                authorizationEnforcement: "none",
                 requiredInputs: ["secret"],
                 scopeRequested: "whatever the pasted refresh token carries (expected: openid email offline_access gmail.readonly calendar.readonly contacts.readonly tasks.readonly); this flow requests no new scopes",
                 revocation: "revoke the app's access at https://myaccount.google.com/permissions",
@@ -929,7 +934,7 @@ const RESOURCES = [
         { name: "tasks-list", file: "tasks-list.mjs", summary: "List the tasks in one task list", scopes: ["https://www.googleapis.com/auth/tasks.readonly"], description: "One collection: the tasks in one list via tasks.list. Read params: tasklist (required), showCompleted, showHidden, updatedMin, maxResults, cursor. A task `id` is the `task` parameter of @gmail/task-get.", faults: googleFaults([googleNotFound]) },
         { name: "task-get", file: "task-get.mjs", summary: "Read a single task", scopes: ["https://www.googleapis.com/auth/tasks.readonly"], description: "One collection of one record: a task via tasks.get. Read params: tasklist (required), task (required). The ids come from @gmail/tasklists-list and @gmail/tasks-list.", faults: googleFaults([googleNotFound]) },
     ].map((r) => ({
-        identity: `@gmail/${r.name}@1.0.0`,
+        identity: `@gmail/${r.name}@1.0.1`,
         file: r.file,
         manifest: {
             kind: "data-source",
