@@ -245,7 +245,7 @@ In `poll-login`, `authenticate` in mode `initial` or `step-up` MAY return a **pe
 
 The interaction details for `poll-login` MUST give the entry point, the poll interval, and the maximum wait. The `auth` audit event (§8.3) is produced on the terminal outcome (credential issued, declined, or timed out), not on each intervening poll.
 
-An Authenticator MAY declare both `secret-entry` and `poll-login`; the caller then chooses between supplying a token directly and signing in through the web page. The credential material produced, its lifetime, verification, and everything downstream are identical whichever the caller chooses.
+An Authenticator MAY offer `secret-entry`, `poll-login`, or both. Each client then uses whichever it supports and finds convenient — a terminal that can open a browser polls; a client where supplying a token directly is simpler takes that. The credential material produced, its lifetime, verification, and everything downstream are identical whichever the client uses.
 
 The web login `poll-login` performs is the target system's own (for example a Google SSO the target trusts): the Authenticator uses that sign-in to establish the user's identity, decides whether the user is authorized, and issues its own credential material for the target. That credential is distinct from any Registry token and from the identity token consumed during sign-in (§7.2 audience rules); `poll-login` does not exchange one for another.
 

@@ -726,18 +726,56 @@ function secretPrompt(authResolved: ResolvedResource): string {
     return lines.join("\n");
 }
 
-/** Run the Authenticator's flow (§4.7): collect the secret, authenticate, cache, audit. */
-async function acquireCredential(deps: ExecutorDeps, authResolved: ResolvedResource, secret: string) {
+interface AuthOutcome {
+    credential?: Record<string, unknown>;
+    principal?: Record<string, unknown>;
+    pending?: boolean;
+    verificationUrl?: string;
+    handle?: string;
+    interval?: number;
+    expiresIn?: number;
+}
+
+/**
+  * poll-login (§4.7.1a): while `authenticate` returns a pending result, open its verification URL once
+  * and re-invoke with the handle every `interval` seconds until it yields credential material or the
+  * window (`expiresIn`, default 300s) elapses. The client drives the wait; nothing is pasted.
+  */
+async function resolvePending(deps: ExecutorDeps, module: Record<string, unknown>, authResolved: ResolvedResource, outcome: AuthOutcome): Promise<AuthOutcome> {
+    let opened = false;
+    let deadline = 0;
+    while (outcome?.pending) {
+        if (!opened) {
+            if (outcome.verificationUrl) {
+                process.stderr.write(`sign in to continue: ${outcome.verificationUrl}\n`);
+                if (deps.openUrl) {
+                    try {
+                        await deps.openUrl(outcome.verificationUrl);
+                    } catch {
+                        /* no opener — the printed URL is the fallback */
+                    }
+                }
+            }
+            deadline = Date.now() + (outcome.expiresIn ? outcome.expiresIn * 1000 : 300_000);
+            opened = true;
+        }
+        if (Date.now() > deadline) throw new ExecutorError(`${authResolved.identity}: sign-in not completed in time`, "timeout");
+        await new Promise((r) => setTimeout(r, Math.max(1000, (outcome.interval ?? 2) * 1000)));
+        outcome = (await invokeOperation(module, authResolved, "authenticate", { mode: "initial", handle: outcome.handle }, {})) as AuthOutcome;
+    }
+    return outcome;
+}
+
+/** Run the Authenticator's flow (§4.7): collect the secret or poll the web login, authenticate, cache, audit. */
+async function acquireCredential(deps: ExecutorDeps, authResolved: ResolvedResource, secret?: string) {
     const module = await loadPackage(deps, authResolved);
     const effective = effectiveTierFor(authResolved, null);
     try {
-        const outcome = (await invokeOperation(module, authResolved, "authenticate", { mode: "initial", secret }, {})) as {
-            credential: Record<string, unknown>;
-            principal?: Record<string, unknown>;
-        };
+        let outcome = (await invokeOperation(module, authResolved, "authenticate", { mode: "initial", secret }, {})) as AuthOutcome;
+        outcome = await resolvePending(deps, module, authResolved, outcome);
         const entry = {
             authenticator: authResolved.identity,
-            credential: outcome.credential,
+            credential: outcome.credential ?? {},
             principal: outcome.principal,
             storedAt: new Date().toISOString(),
         };
@@ -854,14 +892,18 @@ async function credentialFor(deps: ExecutorDeps, resolved: ResolvedResource, inl
                 fix: `re-run with --secret <value>, or: doax auth set ${String(authRef)} --secret <value>`,
             });
         }
-        let secret: string;
-        if (auth?.interactionKinds?.includes("browser-login") && deps.openUrl) {
-            secret = await browserLoginSecret(deps, authResolved);
+        // The client picks whichever the Authenticator offers and suits it: the CLI polls when it can (§4.7.1a),
+        // else a browser-login loopback, else the token paste. An Authenticator may declare one or several.
+        const kinds = auth?.interactionKinds ?? [];
+        if (kinds.includes("poll-login")) {
+            entry = await acquireCredential(deps, authResolved);
+        } else if (kinds.includes("browser-login") && deps.openUrl) {
+            entry = await acquireCredential(deps, authResolved, await browserLoginSecret(deps, authResolved));
         } else {
-            secret = (await deps.prompt(`${resolved.identity} needs ${authRef}\n${secretPrompt(authResolved)}`)).trim();
+            const secret = (await deps.prompt(`${resolved.identity} needs ${authRef}\n${secretPrompt(authResolved)}`)).trim();
             if (!secret) throw new ExecutorError("no secret entered", "credential-missing");
+            entry = await acquireCredential(deps, authResolved, secret);
         }
-        entry = await acquireCredential(deps, authResolved, secret);
     }
     return { credential: entry.credential, authenticator: String(authRef), effective };
 }
