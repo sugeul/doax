@@ -1001,7 +1001,9 @@ async function readCmd(deps: CliDeps, refInput: string | undefined, values: Reco
     if (resolved.kind !== "data-source") return { exitCode: 1, stderr: `doax read: ${resolved.identity} is a ${resolved.kind}, not a data-source` };
 
     const { credential, authenticator, effective } = await credentialFor(xdeps, resolved, values.secret as string | undefined, Boolean(values.authed));
-    await confirmTier(xdeps, resolved, effective, Boolean(values.yes), `read ${resolved.identity}`);
+    // A read's per-call authorization is derived: a fresh interactive authentication this call (--authed) is
+    // the consent, so no separate --yes is needed. Effecting operations still require explicit authorization.
+    await confirmTier(xdeps, resolved, effective, Boolean(values.yes) || Boolean(values.authed), `read ${resolved.identity}`);
     const module = await loadPackage(xdeps, resolved);
     const operation = values.metadata ? "metadata" : "read";
     const eventClass = values.metadata ? "metadata-read" : "data-read";

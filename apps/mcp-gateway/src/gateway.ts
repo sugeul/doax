@@ -234,8 +234,8 @@ async function readTool(deps: CliDeps, args: Record<string, unknown>) {
     if (r.exitCode !== 0) {
         const step = await maybePoll(deps, r.stderr);
         if (step && "signIn" in step) return step.signIn;
-        // The completed sign-in is this call's authorization for a read (§7.4), so --yes alongside --authed.
-        if (step && "retry" in step) r = await run([...cmd, "--authed", "--yes"], deps);
+        // --authed carries both: the freshly minted credential and the read's derived authorization (§7.4).
+        if (step && "retry" in step) r = await run([...cmd, "--authed"], deps);
     }
     return r.exitCode === 0 ? asText(r.stdout ?? "") : handbackOrError(r.stderr);
 }
