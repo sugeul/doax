@@ -175,6 +175,7 @@ export async function run(argv: string[], deps: CliDeps = defaultDeps()): Promis
             web: { type: "boolean" },
             "no-browser": { type: "boolean" },
             timeout: { type: "string" },
+            handle: { type: "string" },
         },
         allowPositionals: true,
         strict: false,
@@ -888,6 +889,7 @@ async function credentialFor(deps: ExecutorDeps, resolved: ResolvedResource, inl
             throw new ExecutorError(`no cached credential for ${authRef}`, "credential-missing", {
                 willRequireInteraction: true,
                 authenticator: authResolved.identity,
+                interactionKinds: auth?.interactionKinds ?? null,
                 interactionDetails: auth?.interactionDetails ?? null,
                 fix: `re-run with --secret <value>, or: doax auth set ${String(authRef)} --secret <value>`,
             });
@@ -911,6 +913,30 @@ async function credentialFor(deps: ExecutorDeps, resolved: ResolvedResource, inl
 async function authCmd(deps: CliDeps, rest: string[], values: Record<string, unknown>, json: boolean): Promise<CliResult> {
     const [sub, refInput] = rest;
     const xdeps = executorDeps(deps);
+
+    // One step of poll-login (§4.7.1a) for a non-blocking client (the gateway): call authenticate once,
+    // optionally with a continuation --handle. Returns the pending handle+URL, or caches the credential.
+    if (sub === "poll") {
+        if (!refInput) return { exitCode: 2, stderr: "doax auth poll: expected <@ns/name> [--handle <h>]" };
+        const resolved = await resolveResource(xdeps, refInput);
+        if (resolved.kind !== "authenticator") return { exitCode: 1, stderr: `doax auth poll: ${resolved.identity} is a ${resolved.kind}, not an authenticator` };
+        const module = await loadPackage(xdeps, resolved);
+        const outcome = (await invokeOperation(module, resolved, "authenticate", { mode: "initial", handle: values.handle as string | undefined }, {})) as AuthOutcome;
+        if (outcome.pending) {
+            return {
+                exitCode: 0,
+                stdout: JSON.stringify({ ok: true, pending: true, verificationUrl: outcome.verificationUrl, handle: outcome.handle, interval: outcome.interval, expiresIn: outcome.expiresIn }),
+            };
+        }
+        if (outcome.credential) {
+            const effective = effectiveTierFor(resolved, null);
+            const entry = { authenticator: resolved.identity, credential: outcome.credential, principal: outcome.principal, storedAt: new Date().toISOString() };
+            writeCredential(xdeps, credentialKey(resolved.identity), entry);
+            audit(xdeps, [baseEvent(xdeps, "auth", resolved.identity, effective, { status: "success", reasonCode: "ok" }, { authenticator: resolved.identity })]);
+            return { exitCode: 0, stdout: JSON.stringify({ ok: true, authenticated: resolved.identity, principal: entry.principal ?? {} }) };
+        }
+        return { exitCode: 1, stderr: JSON.stringify({ ok: false, error: "authenticate returned neither credential nor pending" }) };
+    }
 
     if (sub === "list") {
         const all = readCredentials(xdeps);

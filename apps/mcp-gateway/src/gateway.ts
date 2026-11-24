@@ -18,6 +18,7 @@ export const REGISTRY = (process.env.DOAX_REGISTRY ?? "https://registry.doax.io"
 const MODE: Mode = { single: false };
 const COOKIE_CRED = "doax_tok_";
 const COOKIE_AUTH = "doax_auth_";
+const COOKIE_POLL = "doax_poll_";
 
 export const REQUIRE_LOGIN = process.env.DOAX_REQUIRE_LOGIN === "1";
 export const PROTECTED_RESOURCE_PATH = "/.well-known/oauth-protected-resource";
@@ -74,6 +75,7 @@ function depsFor(token: string | undefined, home: string): CliDeps {
 function cookiesToFiles(home: string, cookies: Record<string, string>): void {
     const creds: Record<string, unknown> = {};
     const auth: Record<string, unknown> = {};
+    const poll: Record<string, unknown> = {};
     for (const [name, value] of Object.entries(cookies)) {
         let entry: Record<string, unknown>;
         try {
@@ -81,19 +83,27 @@ function cookiesToFiles(home: string, cookies: Record<string, string>): void {
         } catch {
             continue;
         }
-        if (name.startsWith(COOKIE_CRED) && typeof entry.authenticator === "string") {
-            try {
-                const ref = parseResourceRef(entry.authenticator);
-                creds[`@${ref.namespace}/${ref.name}`] = entry;
-            } catch {
-                continue;
+        try {
+            if (name.startsWith(COOKIE_CRED) && typeof entry.authenticator === "string") {
+                creds[authDomain(entry.authenticator)] = entry;
+            } else if (name.startsWith(COOKIE_POLL) && typeof entry.authenticator === "string") {
+                poll[authDomain(entry.authenticator)] = entry;
+            } else if (name.startsWith(COOKIE_AUTH) && typeof entry.resource === "string") {
+                auth[entry.resource] = entry;
             }
-        } else if (name.startsWith(COOKIE_AUTH) && typeof entry.resource === "string") {
-            auth[entry.resource] = entry;
+        } catch {
+            /* a malformed authenticator ref is simply an absent entry */
         }
     }
     if (Object.keys(creds).length) writeFileSync(join(home, "credentials.json"), JSON.stringify(creds));
     if (Object.keys(auth).length) writeFileSync(join(home, "auth-tokens.json"), JSON.stringify(auth));
+    if (Object.keys(poll).length) writeFileSync(join(home, "poll-handles.json"), JSON.stringify(poll));
+}
+
+/** The credential cache key: the authenticator's versionless `@ns/name`. */
+function authDomain(authenticator: string): string {
+    const ref = parseResourceRef(authenticator);
+    return `@${ref.namespace}/${ref.name}`;
 }
 
 function filesToCookies(home: string): SetCookie[] {
@@ -109,6 +119,7 @@ function filesToCookies(home: string): SetCookie[] {
     };
     add(COOKIE_CRED, "credentials.json");
     add(COOKIE_AUTH, "auth-tokens.json");
+    add(COOKIE_POLL, "poll-handles.json");
     return out;
 }
 
@@ -154,15 +165,84 @@ function handbackOrError(stderr: string | undefined) {
     return asText(typeof d.error === "string" ? d.error : (stderr ?? "failed"), true);
 }
 
+/* poll-login over the gateway (§4.7.1a): the client pokes twice. On a credential-missing read/execute whose
+   authenticator offers poll-login, drive one `doax auth poll` step, carrying the handle the cookie remembers
+   between pokes. Pending -> return the sign-in URL and remember the handle; credential -> proceed this poke. */
+
+const pollFile = (home: string) => join(home, "poll-handles.json");
+function readPollHandle(home: string, key: string): string | undefined {
+    try {
+        return (JSON.parse(readFileSync(pollFile(home), "utf8")) as Record<string, { handle?: string }>)[key]?.handle;
+    } catch {
+        return undefined;
+    }
+}
+function savePollHandle(home: string, key: string, entry: Record<string, unknown> | null): void {
+    let all: Record<string, unknown> = {};
+    try {
+        all = JSON.parse(readFileSync(pollFile(home), "utf8")) as Record<string, unknown>;
+    } catch {
+        /* no file yet */
+    }
+    if (entry) all[key] = entry;
+    else delete all[key];
+    writeFileSync(pollFile(home), JSON.stringify(all));
+}
+
+type PollStep = { signIn: ReturnType<typeof asText> } | { retry: true } | null;
+async function maybePoll(deps: CliDeps, stderr: string | undefined): Promise<PollStep> {
+    let d: Record<string, unknown> = {};
+    try {
+        d = JSON.parse(stderr ?? "{}") as Record<string, unknown>;
+    } catch {
+        return null;
+    }
+    const authRef = d.authenticator;
+    const kinds = d.interactionKinds;
+    if (d.faultClass !== "credential-missing" || typeof authRef !== "string" || !Array.isArray(kinds) || !kinds.includes("poll-login")) return null;
+    const home = deps.home!;
+    const key = authDomain(authRef);
+    const handle = readPollHandle(home, key);
+    const p = await run(["auth", "poll", authRef, ...(handle ? ["--handle", handle] : []), "--json", "--no-input"], deps);
+    if (p.exitCode !== 0) return null;
+    let pr: Record<string, unknown>;
+    try {
+        pr = JSON.parse(p.stdout ?? "{}") as Record<string, unknown>;
+    } catch {
+        return null;
+    }
+    if (pr.pending) {
+        savePollHandle(home, key, { authenticator: authRef, handle: pr.handle, verificationUrl: pr.verificationUrl });
+        return { signIn: asText(JSON.stringify({ status: "sign_in", verificationUrl: pr.verificationUrl, howto: "open the URL and sign in, then call this tool again" }, null, 2)) };
+    }
+    if (pr.authenticated) {
+        savePollHandle(home, key, null);
+        return { retry: true };
+    }
+    return null;
+}
+
 async function readTool(deps: CliDeps, args: Record<string, unknown>) {
     const extra = [...argStrings(args), ...(args.yes ? ["--yes"] : []), ...(args.metadata ? ["--metadata"] : [])];
-    const r = await run(["read", String(args.ref ?? ""), ...extra, "--json", "--no-input"], deps);
+    const cmd = ["read", String(args.ref ?? ""), ...extra, "--json", "--no-input"];
+    let r = await run(cmd, deps);
+    if (r.exitCode !== 0) {
+        const step = await maybePoll(deps, r.stderr);
+        if (step && "signIn" in step) return step.signIn;
+        if (step && "retry" in step) r = await run(cmd, deps);
+    }
     return r.exitCode === 0 ? asText(r.stdout ?? "") : handbackOrError(r.stderr);
 }
 
 async function executeTool(deps: CliDeps, args: Record<string, unknown>, dryRun: boolean) {
     const extra = [...argStrings(args), ...(dryRun ? ["--dry-run"] : args.yes ? ["--yes"] : [])];
-    const r = await run(["execute", String(args.ref ?? ""), ...extra, "--json", "--no-input"], deps);
+    const cmd = ["execute", String(args.ref ?? ""), ...extra, "--json", "--no-input"];
+    let r = await run(cmd, deps);
+    if (r.exitCode !== 0) {
+        const step = await maybePoll(deps, r.stderr);
+        if (step && "signIn" in step) return step.signIn;
+        if (step && "retry" in step) r = await run(cmd, deps);
+    }
     return r.exitCode === 0 ? asText(r.stdout ?? "") : handbackOrError(r.stderr);
 }
 
