@@ -880,6 +880,33 @@ app.put("/:ns{@[a-z0-9._-]+}/:namever", async (c) => {
     for (const field of ["kind", "summary", "description", "owner", "requiredTier", "interfaceMapping", "serviceLevel"]) {
         if (!(field in body.manifest)) return c.json(withManifesto(DOMAIN, { error: `manifest missing mandatory field: ${field}` }), 400);
     }
+    // Authorization enforcement (spec §4.7.1): mandatory for an Authenticator, and a Tier 1/2 Resource may not
+    // reference an Authenticator whose service enforces none.
+    const enforcementOf = (m: Record<string, unknown> | undefined) => (m?.authentication as { authorizationEnforcement?: unknown } | undefined)?.authorizationEnforcement;
+    if (body.manifest.kind === "authenticator" && (typeof enforcementOf(body.manifest) !== "string" || !enforcementOf(body.manifest))) {
+        return c.json(withManifesto(DOMAIN, { error: "authentication specification missing mandatory item: authorizationEnforcement (§4.7.1)" }), 400);
+    }
+    const authRef = body.manifest.authenticator;
+    if ((body.manifest.requiredTier === 1 || body.manifest.requiredTier === 2) && typeof authRef === "string" && authRef !== "none") {
+        const am = IDENTITY.exec(authRef);
+        const { rows } = am
+            ? await db!.query<ManifestRow>(
+                  am[3]
+                      ? `SELECT * FROM manifests WHERE namespace=$1 AND name=$2 AND version=$3`
+                      : `SELECT * FROM manifests WHERE namespace=$1 AND name=$2 AND lifecycle='active' ORDER BY published_at DESC LIMIT 1`,
+                  am[3] ? [am[1], am[2], am[3]] : [am[1], am[2]],
+              )
+            : { rows: [] as ManifestRow[] };
+        const enforcement = enforcementOf(rows[0]?.manifest as Record<string, unknown> | undefined);
+        if (typeof enforcement !== "string" || enforcement === "none") {
+            return c.json(
+                withManifesto(DOMAIN, {
+                    error: `a Tier ${String(body.manifest.requiredTier)} resource needs an Authenticator that enforces confirmation; ${authRef} declares authorizationEnforcement ${String(enforcement ?? "(missing)")} (§4.7.1)`,
+                }),
+                400,
+            );
+        }
+    }
 
     const content = Buffer.from(body.package, "base64");
     const digest = `sha256-${createHash("sha256").update(content).digest("hex")}`;

@@ -9,7 +9,7 @@ import {
     audit,
     authHeaders,
     baseEvent,
-    confirmTier,
+    confirmInvocation,
     credentialKey,
     effectiveTierFor,
     ExecutorError,
@@ -45,9 +45,9 @@ Usage:
                                               Authenticate to a target system and cache the credential
     doax auth list                            List cached credentials by authenticator
     doax auth purge [<@ns/name>|--all]        Remove cached credentials
-    doax read <@ns/name[@version]> [--param k=v ...] [--metadata] [--secret <value>]
+    doax read <@ns/name[@version]> [--param k=v ...] [--metadata] [--secret <value>] [--handle <h> --verifier <v>]
                                               Read a data-source (or its metadata)
-    doax execute <@ns/name[@version]> [--param k=v ...] [--dry-run] [--yes] [--secret <value>]
+    doax execute <@ns/name[@version]> [--param k=v ...] [--dry-run] [--yes] [--secret <value>] [--handle <h> --verifier <v>]
                                               Dry-run or execute an action
     doax app deploy <@ns> <dir>               Deploy a static doax-app to the registry's app host
     doax publish <manifest.json> <package-file>  Publish a resource (identity comes from the manifest;
@@ -74,7 +74,11 @@ Every command runs non-interactively for agent callers:
     --json          Single JSON object on stdout/stderr; errors carry faultClass and a machine-actionable fix
     --no-input      Never prompt (also: DOAX_NO_INPUT=1, or any non-TTY stdin)
     --secret        Supply the authenticator secret inline when nothing is cached
-    --yes           Grant tier-2 per-call authorization without a prompt
+    --yes           Execute an action that declares dry-run "none" (no preview is possible). Not an authorization:
+                    Tier 1/2 invocations are confirmed by the resource's Authenticator (spec §7.3)
+    --handle, --verifier
+                    Complete a confirmation that came back pending (spec §7.8): open its entry point,
+                    then re-run the same command with both
 
 Registries: the CLI holds a list of registries and resolves each entity from the one that owns
 its namespace (doax registry add @corp https://registry.corp.internal). Unrouted namespaces use
@@ -176,7 +180,7 @@ export async function run(argv: string[], deps: CliDeps = defaultDeps()): Promis
             "no-browser": { type: "boolean" },
             timeout: { type: "string" },
             handle: { type: "string" },
-            authed: { type: "boolean" },
+            verifier: { type: "string" },
         },
         allowPositionals: true,
         strict: false,
@@ -869,20 +873,23 @@ async function browserLoginSecret(deps: ExecutorDeps, authResolved: ResolvedReso
     });
 }
 
-/**
-  * Resolve the resource's Authenticator, its cached credential, and the effective tier
-  * (§9.1 steps 4-5). No pre-auth is required: when nothing is cached and the session is
-  * interactive, the auth flow runs inline, in context, and the operation continues.
-  */
-async function credentialFor(deps: ExecutorDeps, resolved: ResolvedResource, inlineSecret?: string, useFresh = false) {
+/** The resource's Authenticator and the effective tier its invocation runs at (§9.1 step 4). */
+async function authContext(deps: ExecutorDeps, resolved: ResolvedResource) {
     const authRef = resolved.manifest.authenticator;
-    if (!authRef || authRef === "none") return { credential: null, authenticator: "none" as const, effective: effectiveTierFor(resolved, null) };
+    if (!authRef || authRef === "none") return { authRef: "none" as const, authResolved: null, effective: effectiveTierFor(resolved, null) };
     const authResolved = await resolveResource(deps, String(authRef));
     const authTier = (authResolved.manifest.requiredTier as Tier | undefined) ?? null;
-    const effective = effectiveTierFor(resolved, authTier);
-    // Tier 1 re-authenticates every call (§4.7) — unless the auth for this call just completed (useFresh), as
-    // when a poll-login gateway minted the credential this invocation and re-runs to use it.
-    let entry = (effective.tier === 1 && !useFresh) || inlineSecret ? undefined : readCredentials(deps)[credentialKey(String(authRef))];
+    return { authRef: String(authRef), authResolved, effective: effectiveTierFor(resolved, authTier) };
+}
+
+/**
+  * The cached credential for the resource's Authenticator (§9.1 step 5). No pre-auth is required: when nothing
+  * is cached and the session is interactive, the auth flow runs inline, in context, and the operation continues.
+  */
+async function credentialFor(deps: ExecutorDeps, resolved: ResolvedResource, ctx: Awaited<ReturnType<typeof authContext>>, inlineSecret?: string) {
+    const { authRef, authResolved } = ctx;
+    if (!authResolved) return null;
+    let entry = inlineSecret ? undefined : readCredentials(deps)[credentialKey(authRef)];
     if (!entry && inlineSecret) {
         entry = await acquireCredential(deps, authResolved, inlineSecret);
     }
@@ -910,7 +917,7 @@ async function credentialFor(deps: ExecutorDeps, resolved: ResolvedResource, inl
             entry = await acquireCredential(deps, authResolved, secret);
         }
     }
-    return { credential: entry.credential, authenticator: String(authRef), effective };
+    return entry.credential;
 }
 
 async function authCmd(deps: CliDeps, rest: string[], values: Record<string, unknown>, json: boolean): Promise<CliResult> {
@@ -994,21 +1001,31 @@ async function authCmd(deps: CliDeps, rest: string[], values: Record<string, unk
     };
 }
 
+/** The pending exchange a caller carries back to complete a confirmation (§7.8). */
+const resumeFrom = (values: Record<string, unknown>) =>
+    typeof values.handle === "string" && typeof values.verifier === "string" ? { handle: values.handle, verifier: values.verifier } : undefined;
+
 async function readCmd(deps: CliDeps, refInput: string | undefined, values: Record<string, unknown>): Promise<CliResult> {
     if (!refInput) return { exitCode: 2, stderr: "doax read: missing resource reference" };
     const xdeps = executorDeps(deps);
     const resolved = await resolveResource(xdeps, refInput);
     if (resolved.kind !== "data-source") return { exitCode: 1, stderr: `doax read: ${resolved.identity} is a ${resolved.kind}, not a data-source` };
 
-    const { credential, authenticator, effective } = await credentialFor(xdeps, resolved, values.secret as string | undefined, Boolean(values.authed));
-    // A read's per-call authorization is derived: a fresh interactive authentication this call (--authed) is
-    // the consent, so no separate --yes is needed. Effecting operations still require explicit authorization.
-    await confirmTier(xdeps, resolved, effective, Boolean(values.yes) || Boolean(values.authed), `read ${resolved.identity}`);
-    const module = await loadPackage(xdeps, resolved);
+    const ctx = await authContext(xdeps, resolved);
+    const { authRef: authenticator, effective } = ctx;
     const operation = values.metadata ? "metadata" : "read";
     const eventClass = values.metadata ? "metadata-read" : "data-read";
+    const input = paramsToInput(values.param);
+    const cached = await credentialFor(xdeps, resolved, ctx, values.secret as string | undefined);
+    const confirmed = await confirmInvocation(xdeps, resolved, effective, ctx.authResolved, operation, input, resumeFrom(values));
+    const credential = confirmed.credential ?? cached;
+    const module = await loadPackage(xdeps, resolved);
     try {
-        const result = (await invokeOperation(module, resolved, operation, paramsToInput(values.param), { credential })) as Record<string, unknown>;
+        const result = (await invokeOperation(module, resolved, operation, input, {
+            credential,
+            confirmation: confirmed.confirmation,
+            authorization: confirmed.authorization,
+        })) as Record<string, unknown>;
         const freshness = (result.freshness ?? (result.metadata as { lastRefreshed?: string } | undefined)?.lastRefreshed) as string | undefined;
         audit(xdeps, [
             baseEvent(xdeps, eventClass, resolved.identity, effective, { status: "success", reasonCode: "ok" }, { authenticator, sourceFreshness: freshness }),
@@ -1028,15 +1045,24 @@ async function executeCmd(deps: CliDeps, refInput: string | undefined, values: R
     const resolved = await resolveResource(xdeps, refInput);
     if (resolved.kind !== "action") return { exitCode: 1, stderr: `doax execute: ${resolved.identity} is a ${resolved.kind}, not an action` };
 
-    const { credential, authenticator, effective } = await credentialFor(xdeps, resolved, values.secret as string | undefined, Boolean(values.authed));
-    const module = await loadPackage(xdeps, resolved);
+    const ctx = await authContext(xdeps, resolved);
+    const { authRef: authenticator, effective } = ctx;
     const input = paramsToInput(values.param);
     const dryRunMode = resolved.manifest.dryRunMode ?? "none";
+    const operation = values["dry-run"] ? "dry-run" : "execute";
+    if (operation === "execute" && dryRunMode === "none" && !values.yes) {
+        return { exitCode: 1, stderr: `doax execute: ${resolved.identity} cannot be previewed (dry-run: none); re-run with --yes to proceed` };
+    }
+    const cached = await credentialFor(xdeps, resolved, ctx, values.secret as string | undefined);
+    const confirmed = await confirmInvocation(xdeps, resolved, effective, ctx.authResolved, operation, input, resumeFrom(values));
+    const credential = confirmed.credential ?? cached;
+    const opContext = { credential, confirmation: confirmed.confirmation, authorization: confirmed.authorization };
+    const module = await loadPackage(xdeps, resolved);
 
     if (values["dry-run"]) {
         if (dryRunMode === "none") return { exitCode: 1, stderr: `doax execute: ${resolved.identity} declares dry-run mode "none"` };
         try {
-            const result = await invokeOperation(module, resolved, "dry-run", input, { credential });
+            const result = await invokeOperation(module, resolved, "dry-run", input, opContext);
             audit(xdeps, [
                 baseEvent(xdeps, "dry-run", resolved.identity, effective, { status: "success", reasonCode: "ok" }, {
                     authenticator,
@@ -1054,13 +1080,9 @@ async function executeCmd(deps: CliDeps, refInput: string | undefined, values: R
         }
     }
 
-    await confirmTier(xdeps, resolved, effective, Boolean(values.yes), `execute ${resolved.identity}`);
-    if (dryRunMode === "none" && !values.yes) {
-        return { exitCode: 1, stderr: `doax execute: ${resolved.identity} cannot be previewed (dry-run: none); re-run with --yes to proceed` };
-    }
     const idempotencyKey = randomUUID();
     try {
-        const result = await invokeOperation(module, resolved, "execute", input, { credential, idempotencyKey });
+        const result = await invokeOperation(module, resolved, "execute", input, { ...opContext, idempotencyKey });
         audit(xdeps, [
             baseEvent(xdeps, "execute", resolved.identity, effective, { status: "success", reasonCode: "ok" }, { authenticator, idempotencyKey }),
         ]);

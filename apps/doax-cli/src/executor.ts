@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { hostname, userInfo } from "node:os";
 import { join } from "node:path";
@@ -15,8 +15,8 @@ import {
 } from "@doax/protocol";
 
 /**
-  * The executor side of the CLI (spec §9): resolve, verify integrity, run the authorization
-  * flow for the effective tier, obtain credentials through the referenced Authenticator,
+  * The executor side of the CLI (spec §9): resolve, verify integrity, relay the confirmation the
+  * effective tier calls for, obtain credentials through the referenced Authenticator,
   * invoke the package through its mapped Fixed Interface operations, and emit audit events.
   */
 
@@ -38,13 +38,6 @@ export interface ResolvedResource {
     warning?: string;
     /** Registry origin that resolved this resource; packages and audit go back to it. */
     origin: string;
-    /**
-     * Maximum lifetime, in seconds, of a Tier 2 authorization token for this Resource, bounded by the owning
-     * namespace's policy (spec §7.4a; the namespace shortening a token's lifetime, §7.2). A confirmed
-     * authorization is held as a token with this lifetime; while it is unexpired the per-call check proceeds.
-     * 0 or absent means strict per-call: every invocation is re-confirmed, no token is issued.
-     */
-    tier2AuthLifetimeSeconds?: number;
 }
 
 /* ---------- the client's registry list: namespaces route to registries (npm-scope style) ---------- */
@@ -247,69 +240,167 @@ export function effectiveTierFor(resolved: ResolvedResource, authenticatorTier: 
     return computeEffectiveTier(resolved.manifest.requiredTier ?? 4, others);
 }
 
-/* ---------- Tier 2 authorization tokens (spec §7.4a) ----------
-   A confirmed Tier 2 authorization is held as a token with a lifetime — not a session — scoped to one Resource
-   (versionless `@ns/name`). While unexpired, the per-call check proceeds without re-confirming; verification is
-   the token's expiry alone, so no party keeps session state. This is how this client (doax-cli) holds the token;
-   any Executor — agent, app, or CLI — holds its own. Tier 1 never issues one. No secret lives here; credential
-   material stays in credentials.json. */
+/* ---------- per-invocation confirmation (spec §4.7 `confirm`, §7.3, §7.8) ----------
+   The Executor is not trusted (§7.3): it never authorizes anything itself. At Tier 1 and 2 it relays the
+   Authenticator's `confirm` — the Authenticator service signs the person in when needed and takes their
+   decision on this one invocation — and hands the confirmation to the operation for its verifier to check. */
 
-interface AuthToken {
+/** Canonical JSON: keys sorted recursively, no whitespace, absent values dropped (spec §6.4). */
+export function canonicalJson(value: unknown): string {
+    if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+    if (value && typeof value === "object") {
+        const obj = value as Record<string, unknown>;
+        const keys = Object.keys(obj).filter((k) => obj[k] !== undefined).sort();
+        return `{${keys.map((k) => `${JSON.stringify(k)}:${canonicalJson(obj[k])}`).join(",")}}`;
+    }
+    return JSON.stringify(value);
+}
+
+/** The request hash a confirmation is bound to (spec §6.4): sha256 of the canonical `{resource, operation, input}`. */
+export function requestHash(resource: string, operation: string, input: Record<string, unknown>): string {
+    return createHash("sha256").update(canonicalJson({ resource, operation, input })).digest("hex");
+}
+
+/** A Tier 2 authorization token the Authenticator service granted (§7.4a). Held only; the service verifies it. */
+interface HeldAuthorization {
     resource: string;
-    issuedAt: string;
-    /** Expiry; the authorization is valid only while now < exp. */
+    token: unknown;
     exp: string;
 }
 
-const authTokensPath = (deps: ExecutorDeps) => join(deps.home, "auth-tokens.json");
+const authorizationsPath = (deps: ExecutorDeps) => join(deps.home, "authorizations.json");
 
-function readAuthTokens(deps: ExecutorDeps): Record<string, AuthToken> {
+function readAuthorizations(deps: ExecutorDeps): Record<string, HeldAuthorization> {
     try {
-        return JSON.parse(readFileSync(authTokensPath(deps), "utf8")) as Record<string, AuthToken>;
+        return JSON.parse(readFileSync(authorizationsPath(deps), "utf8")) as Record<string, HeldAuthorization>;
     } catch {
         return {};
     }
 }
 
-/** True while a Tier 2 authorization token for this Resource is still within its lifetime. */
-function validAuthToken(deps: ExecutorDeps, resourceKey: string): boolean {
-    const token = readAuthTokens(deps)[resourceKey];
-    return token ? Date.parse(token.exp) > Date.now() : false;
+function holdAuthorization(deps: ExecutorDeps, resourceKey: string, held: HeldAuthorization): void {
+    const all = readAuthorizations(deps);
+    all[resourceKey] = held;
+    mkdirSync(deps.home, { recursive: true });
+    writeFileSync(authorizationsPath(deps), JSON.stringify(all, null, 2));
+    chmodSync(authorizationsPath(deps), 0o600);
 }
 
-/** Issue an authorization token for the lifetime namespace policy allows; zero lifetime issues nothing. */
-function issueAuthToken(deps: ExecutorDeps, resourceKey: string, lifetimeSeconds: number): void {
-    if (!(lifetimeSeconds > 0)) return;
-    const now = new Date();
-    const all = readAuthTokens(deps);
-    all[resourceKey] = { resource: resourceKey, issuedAt: now.toISOString(), exp: new Date(now.getTime() + lifetimeSeconds * 1000).toISOString() };
-    mkdirSync(deps.home, { recursive: true });
-    writeFileSync(authTokensPath(deps), JSON.stringify(all, null, 2));
-    chmodSync(authTokensPath(deps), 0o600);
+/** The pending exchange a caller carries back to complete a confirmation asynchronously (§7.8). */
+export interface PendingExchange {
+    handle: string;
+    verifier: string;
+}
+
+interface ConfirmOutcome {
+    pending?: boolean;
+    entryPoint?: string;
+    handle?: string;
+    interval?: number;
+    expiresIn?: number;
+    confirmation?: unknown;
+    id?: string;
+    credential?: Record<string, unknown>;
+    principal?: Record<string, unknown>;
+    authorization?: { token: unknown; exp: string };
+}
+
+export interface Confirmed {
+    confirmation?: unknown;
+    credential?: Record<string, unknown>;
+    authorization?: unknown;
 }
 
 /**
- * Tier 2 demands per-call authorization; a Tier 2 authorization token for the same Resource may stand until it
- * expires (spec §7.4a), scoped to that one Resource and bounded by namespace policy. Tier 1 is always per-call —
- * no authorization token is ever issued for it. Tier 3/4 need no check.
- */
-export async function confirmTier(deps: ExecutorDeps, resolved: ResolvedResource, effective: EffectiveTier, assumeYes: boolean, what: string): Promise<void> {
-    if (effective.tier > 2) return;
+  * Obtain this invocation's confirmation from the Authenticator (§9.1 step 4). Tier 3/4 need none; Tier 2 presents
+  * an authorization token still within its lifetime. Otherwise `confirm` runs: a terminal waits on the entry point;
+  * a non-interactive caller gets the pending exchange back and completes it later with `resume`.
+  */
+export async function confirmInvocation(
+    deps: ExecutorDeps,
+    resolved: ResolvedResource,
+    effective: EffectiveTier,
+    authResolved: ResolvedResource | null,
+    operation: string,
+    input: Record<string, unknown>,
+    resume?: PendingExchange,
+): Promise<Confirmed> {
+    if (effective.tier > 2) return {};
     const resourceKey = credentialKey(resolved.identity);
-    // Tier 2 only: an unexpired authorization token for this Resource skips the re-check.
-    if (effective.tier === 2 && validAuthToken(deps, resourceKey)) return;
-    if (!assumeYes) {
+    if (effective.tier === 2 && !resume) {
+        const held = readAuthorizations(deps)[resourceKey];
+        if (held && Date.parse(held.exp) > Date.now()) return { authorization: held.token };
+    }
+    if (!authResolved?.manifest.interfaceMapping?.confirm) {
+        throw new ExecutorError(
+            `tier ${effective.tier} needs a confirmation, but ${authResolved?.identity ?? "no authenticator"} does not implement confirm (spec §4.7)`,
+            "confirm-unsupported",
+        );
+    }
+    const auth = authResolved;
+    const module = await loadPackage(deps, auth);
+    const descriptor = { resource: resourceKey, operation, requestHash: requestHash(resourceKey, operation, input) };
+    const verifier = resume?.verifier ?? randomBytes(32).toString("base64url");
+    const challenge = createHash("sha256").update(verifier).digest("base64url");
+    const call = (handle?: string) =>
+        invokeOperation(module, auth, "confirm", handle ? { descriptor, tier: effective.tier, handle, verifier } : { descriptor, tier: effective.tier, challenge }, {}) as Promise<ConfirmOutcome>;
+
+    const decided = (outcome: ConfirmOutcome, reasonCode: string) =>
+        audit(deps, [
+            baseEvent(deps, outcome.confirmation ? "approve" : "reject", resolved.identity, effective, { status: outcome.confirmation ? "success" : "failure", reasonCode }, {
+                authenticator: auth.identity,
+                approval: outcome.id,
+            }),
+        ]);
+
+    let outcome = await call(resume?.handle);
+    if (outcome.pending) {
         if (!deps.prompt) {
-            throw new ExecutorError(`tier ${effective.tier} requires per-call confirmation: re-run with --yes`, "authorization-required", {
-                willRequireInteraction: false,
-                fix: "re-run the same command with --yes to record the caller's authorization",
+            throw new ExecutorError(`${operation} ${resolved.identity} awaits confirmation at ${outcome.entryPoint}`, "confirmation-pending", {
+                willRequireInteraction: true,
+                entryPoint: outcome.entryPoint ?? null,
+                handle: outcome.handle,
+                verifier,
+                interval: outcome.interval ?? null,
+                expiresIn: outcome.expiresIn ?? null,
+                fix: `open the entry point, then re-run the same command with --handle ${outcome.handle} --verifier ${verifier}`,
             });
         }
-        const answer = (await deps.prompt(`Tier ${effective.tier}: authorize ${what}? [y/N] `)).trim().toLowerCase();
-        if (answer !== "y" && answer !== "yes") throw new ExecutorError("authorization declined by the caller", "authorization-declined");
+        process.stderr.write(`confirm to continue: ${outcome.entryPoint}\n`);
+        if (deps.openUrl && outcome.entryPoint) {
+            try {
+                await deps.openUrl(outcome.entryPoint);
+            } catch {
+                /* no opener — the printed URL is the fallback */
+            }
+        }
+        const deadline = Date.now() + (outcome.expiresIn ? outcome.expiresIn * 1000 : 300_000);
+        while (outcome.pending) {
+            if (Date.now() > deadline) {
+                decided({}, "timeout");
+                throw new ExecutorError(`${operation} ${resolved.identity}: confirmation not completed in time`, "timeout");
+            }
+            await new Promise((r) => setTimeout(r, Math.max(1000, (outcome.interval ?? 2) * 1000)));
+            outcome = await call(outcome.handle);
+        }
     }
-    // Tier 2 only: hold this authorization as a token for the namespace-policy lifetime; Tier 1 issues none.
-    if (effective.tier === 2) issueAuthToken(deps, resourceKey, resolved.tier2AuthLifetimeSeconds ?? 0);
+    if (!outcome.confirmation) {
+        decided(outcome, "declined");
+        throw new ExecutorError(`${operation} ${resolved.identity} was not confirmed`, "authorization-declined");
+    }
+    decided(outcome, "ok");
+    if (effective.tier === 2) {
+        if (outcome.authorization) holdAuthorization(deps, resourceKey, { resource: resourceKey, ...outcome.authorization });
+        if (outcome.credential) {
+            writeCredential(deps, credentialKey(auth.identity), {
+                authenticator: auth.identity,
+                credential: outcome.credential,
+                principal: outcome.principal,
+                storedAt: new Date().toISOString(),
+            });
+        }
+    }
+    return { confirmation: outcome.confirmation, credential: outcome.credential, authorization: outcome.authorization?.token };
 }
 
 /*

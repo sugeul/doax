@@ -12,7 +12,7 @@ export const FIXED_INTERFACE = {
     "data-source": ["describe", "metadata", "read"],
     action: ["describe", "dry-run", "execute"],
     executor: ["describe", "capabilities", "dispatch"],
-    authenticator: ["describe", "authenticate"],
+    authenticator: ["describe", "authenticate", "confirm"],
 } as const satisfies Record<ResourceKind, readonly string[]>;
 
 export type FixedOperation<K extends ResourceKind = ResourceKind> = (typeof FIXED_INTERFACE)[K][number];
@@ -69,10 +69,13 @@ export interface ExecutorManifest extends ManifestBase<"executor"> {
     authenticator: string;
 }
 
-export interface AuthenticatorManifest extends ManifestBase<"authenticator"> {
+export interface AuthenticatorManifest extends Omit<ManifestBase<"authenticator">, "interfaceMapping"> {
+    /** `confirm` is required only of an Authenticator that serves Tier 1 or 2 operations (spec §4.7). */
+    interfaceMapping: Record<"describe" | "authenticate", InterfaceBinding> & { confirm?: InterfaceBinding };
     executionLocation?: ExecutionLocation;
     subject: "personal" | "organization" | "machine";
-    authentication: Record<string, unknown>;
+    /** The authentication specification (spec §4.7.1); `authorizationEnforcement` is `none` when the Authenticator service enforces no confirmation. */
+    authentication: Record<string, unknown> & { authorizationEnforcement: string };
 }
 
 export type Manifest = DataSourceManifest | ActionManifest | ExecutorManifest | AuthenticatorManifest;

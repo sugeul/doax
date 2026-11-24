@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,6 +20,7 @@ const MODE: Mode = { single: false };
 const COOKIE_CRED = "doax_tok_";
 const COOKIE_AUTH = "doax_auth_";
 const COOKIE_POLL = "doax_poll_";
+const COOKIE_CONF = "doax_conf_";
 
 export const REQUIRE_LOGIN = process.env.DOAX_REQUIRE_LOGIN === "1";
 export const PROTECTED_RESOURCE_PATH = "/.well-known/oauth-protected-resource";
@@ -77,6 +79,7 @@ function cookiesToFiles(home: string, cookies: Record<string, string>): void {
     const creds: Record<string, unknown> = {};
     const auth: Record<string, unknown> = {};
     const poll: Record<string, unknown> = {};
+    const conf: Record<string, unknown> = {};
     for (const [name, value] of Object.entries(cookies)) {
         let entry: Record<string, unknown>;
         try {
@@ -91,14 +94,17 @@ function cookiesToFiles(home: string, cookies: Record<string, string>): void {
                 poll[authDomain(entry.authenticator)] = entry;
             } else if (name.startsWith(COOKIE_AUTH) && typeof entry.resource === "string") {
                 auth[entry.resource] = entry;
+            } else if (name.startsWith(COOKIE_CONF) && typeof entry.key === "string") {
+                conf[entry.key] = entry;
             }
         } catch {
             /* a malformed authenticator ref is simply an absent entry */
         }
     }
     if (Object.keys(creds).length) writeFileSync(join(home, "credentials.json"), JSON.stringify(creds));
-    if (Object.keys(auth).length) writeFileSync(join(home, "auth-tokens.json"), JSON.stringify(auth));
+    if (Object.keys(auth).length) writeFileSync(join(home, "authorizations.json"), JSON.stringify(auth));
     if (Object.keys(poll).length) writeFileSync(join(home, "poll-handles.json"), JSON.stringify(poll));
+    if (Object.keys(conf).length) writeFileSync(join(home, "confirm-pending.json"), JSON.stringify(conf));
 }
 
 /** The credential cache key: the authenticator's versionless `@ns/name`. */
@@ -123,8 +129,9 @@ function filesToCookies(home: string): SetCookie[] {
         }
     };
     add(COOKIE_CRED, "credentials.json");
-    add(COOKIE_AUTH, "auth-tokens.json");
+    add(COOKIE_AUTH, "authorizations.json");
     add(COOKIE_POLL, "poll-handles.json");
+    add(COOKIE_CONF, "confirm-pending.json");
     return out;
 }
 
@@ -139,8 +146,9 @@ const asText = (value: string, isError = false) => ({ content: [{ type: "text", 
 const SECRET_PROP = { secret: { type: "string", description: "mint the authenticator's token on first use; cached in the cookie afterward" } };
 const READ_TOOL = {
     name: "doax_read",
-    description: "Read a data-source. Needs the authenticator's token; the gateway caches the minted token in your cookie. Pass `secret` to mint on first use; a Tier 1/2 source needs `yes: true` to authorize.",
-    inputSchema: { type: "object", properties: { ref: { type: "string" }, params: { type: "object" }, metadata: { type: "boolean" }, yes: { type: "boolean" }, ...SECRET_PROP }, required: ["ref"] },
+    description:
+        "Read a data-source. Needs the authenticator's token; the gateway caches the minted token in your cookie. Pass `secret` to mint on first use. A Tier 1/2 source returns status `confirm` with a URL: the person confirms there, then call again with the same arguments.",
+    inputSchema: { type: "object", properties: { ref: { type: "string" }, params: { type: "object" }, metadata: { type: "boolean" }, ...SECRET_PROP }, required: ["ref"] },
 };
 const DRY_RUN_TOOL = {
     name: "doax_dry_run",
@@ -149,7 +157,8 @@ const DRY_RUN_TOOL = {
 };
 const EXECUTE_TOOL = {
     name: "doax_execute",
-    description: "Run an action. Tier 1/2 needs the caller's authorization: pass `yes: true`. Tier 2 caches it in the cookie for its window; Tier 1 needs it every call.",
+    description:
+        "Run an action. A Tier 1/2 action returns status `confirm` with a URL: the person confirms there, then call again with the same arguments. `yes: true` only acknowledges running an action whose dry-run mode is none (no preview possible); it authorizes nothing.",
     inputSchema: { type: "object", properties: { ref: { type: "string" }, params: { type: "object" }, yes: { type: "boolean" }, ...SECRET_PROP }, required: ["ref"] },
 };
 
@@ -227,29 +236,57 @@ async function maybePoll(deps: CliDeps, stderr: string | undefined): Promise<Pol
     return null;
 }
 
-async function readTool(deps: CliDeps, args: Record<string, unknown>) {
-    const extra = [...argStrings(args), ...(args.yes ? ["--yes"] : []), ...(args.metadata ? ["--metadata"] : [])];
-    const cmd = ["read", String(args.ref ?? ""), ...extra, "--json", "--no-input"];
-    let r = await run(cmd, deps);
+/* confirm over the gateway (§7.8): a Tier 1/2 call comes back pending; the gateway keeps the handle and verifier in
+   the caller's cookie, keyed by the exact call, and the next identical call collects the confirmation with them. */
+
+const confFile = (home: string) => join(home, "confirm-pending.json");
+function readPending(home: string): Record<string, { handle?: string; verifier?: string; expired?: boolean }> {
+    try {
+        return JSON.parse(readFileSync(confFile(home), "utf8")) as Record<string, { handle?: string; verifier?: string }>;
+    } catch {
+        return {};
+    }
+}
+function savePending(home: string, key: string, entry: Record<string, unknown>): void {
+    const all: Record<string, unknown> = readPending(home);
+    all[key] = { key, ...entry };
+    writeFileSync(confFile(home), JSON.stringify(all));
+}
+
+async function runGuarded(deps: CliDeps, cmd: string[]) {
+    const home = deps.home!;
+    const key = createHash("sha256").update(JSON.stringify(cmd)).digest("base64url").slice(0, 16);
+    const pend = readPending(home)[key];
+    const resume = pend?.handle && pend.verifier ? ["--handle", pend.handle, "--verifier", pend.verifier] : [];
+    if (resume.length) savePending(home, key, { expired: true });
+    let r = await run([...cmd, ...resume], deps);
     if (r.exitCode !== 0) {
         const step = await maybePoll(deps, r.stderr);
         if (step && "signIn" in step) return step.signIn;
-        // --authed carries both: the freshly minted credential and the read's derived authorization (§7.4).
-        if (step && "retry" in step) r = await run([...cmd, "--authed"], deps);
+        if (step && "retry" in step) r = await run(cmd, deps);
     }
-    return r.exitCode === 0 ? asText(r.stdout ?? "") : handbackOrError(r.stderr);
+    if (r.exitCode === 0) return asText(r.stdout ?? "");
+    let d: Record<string, unknown> = {};
+    try {
+        d = JSON.parse(r.stderr ?? "{}") as Record<string, unknown>;
+    } catch {
+        /* not a pending exchange */
+    }
+    if (d.faultClass === "confirmation-pending") {
+        savePending(home, key, { handle: d.handle, verifier: d.verifier });
+        return asText(JSON.stringify({ status: "confirm", entryPoint: d.entryPoint ?? null, howto: "open the URL and confirm, then call this tool again with the same arguments" }, null, 2));
+    }
+    return handbackOrError(r.stderr);
+}
+
+async function readTool(deps: CliDeps, args: Record<string, unknown>) {
+    const extra = [...argStrings(args), ...(args.metadata ? ["--metadata"] : [])];
+    return runGuarded(deps, ["read", String(args.ref ?? ""), ...extra, "--json", "--no-input"]);
 }
 
 async function executeTool(deps: CliDeps, args: Record<string, unknown>, dryRun: boolean) {
     const extra = [...argStrings(args), ...(dryRun ? ["--dry-run"] : args.yes ? ["--yes"] : [])];
-    const cmd = ["execute", String(args.ref ?? ""), ...extra, "--json", "--no-input"];
-    let r = await run(cmd, deps);
-    if (r.exitCode !== 0) {
-        const step = await maybePoll(deps, r.stderr);
-        if (step && "signIn" in step) return step.signIn;
-        if (step && "retry" in step) r = await run([...cmd, "--authed"], deps);
-    }
-    return r.exitCode === 0 ? asText(r.stdout ?? "") : handbackOrError(r.stderr);
+    return runGuarded(deps, ["execute", String(args.ref ?? ""), ...extra, "--json", "--no-input"]);
 }
 
 async function route(deps: CliDeps, msg: JsonRpcMessage): Promise<unknown> {

@@ -64,7 +64,7 @@ export interface AuditEvent {
     reporter?: string;
     /** For records a Provider writes: the audience, channel and method of the token it accepted (spec §7.2, §8.4). */
     token?: { aud?: string; chn?: "executor" | "web"; ath?: string };
-    /** For `dry-run` / `execute` of a gated Action: the approval id requested or consumed (spec §6.4). */
+    /** For a confirmed invocation, including a gated Action: the confirmation id requested or consumed (spec §4.7, §6.4). */
     approval?: string;
     /** For `execute` with an out-of-band payload: its size and digest as observed (spec §6.6). */
     payload?: { size: number; digest: string };

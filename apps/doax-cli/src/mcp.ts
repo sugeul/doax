@@ -63,6 +63,9 @@ function readFailure(stderr: string | undefined, command: string) {
         /* non-JSON stderr (e.g. wrong-kind message) — treat as a plain error below */
     }
     const faultClass = detail.faultClass as string | undefined;
+    if (faultClass === "confirmation-pending") {
+        return text(`Confirm at ${String(detail.entryPoint)}, then run:\n  ${command} --handle ${String(detail.handle)} --verifier ${String(detail.verifier)}`);
+    }
     const handBack =
         detail.willRequireInteraction === true ||
         faultClass === "credential-missing" ||

@@ -179,14 +179,25 @@ authentications producing two tokens for two audiences, **even if they share an 
 Google SSO does not make the tokens interchangeable. The namespace then signs in on its own — its connector's
 OAuth, or `poll-login` — and the gateway keeps the registry token and the target credential distinct.
 
+## Confirmation over the gateway (spec §4.7 `confirm`, §7.8)
+
+The gateway authorizes nothing (spec §7.3). A Tier 1/2 `read`/`execute` calls the namespace Authenticator's
+`confirm`; the Authenticator service signs the person in when needed and takes their decision on this one
+invocation. Over the gateway that is asynchronous:
+
+1. The first call returns `{status: "confirm", entryPoint}`. The gateway keeps the pending handle and verifier
+   in the caller's cookie (`doax_conf_…`), keyed by the exact call.
+2. The person confirms at the entry point — the Authenticator service's own page.
+3. The agent calls the tool again with the same arguments; the gateway collects the confirmation with the
+   handle and verifier and runs the operation. Until the person confirms, the call keeps returning `confirm`.
+
+Tier 1 confirms every call. At Tier 2 the service MAY return an authorization token, which the gateway holds in
+the cookie (`doax_auth_…`) and presents until it expires; the service verifies it. `doax_execute`'s `yes` only
+acknowledges running an action whose dry-run mode is `none` — it is not an authorization.
+
 ## Closed (were open in 305d679)
 
-- Tier 2 `read`/`execute` over the gateway now completes: the gateway cookies `auth-tokens.json`
-  alongside `credentials.json` (every token and authorization lives in the cookie), and
-  `doax_execute` takes `yes: true` to authorize — the Tier 2 token is minted and cached in the
-  cookie for its window; Tier 1 authorizes every call (§4.7).
 - A supplied `secret` re-authenticates instead of losing to a cached credential.
-- A Tier 1 Authenticator runs on every call (§4.7); its credential is not reused.
 - `Authorization` is forwarded only to the registry's own origin, not any URL that starts with it.
 
 ## Work by repository
