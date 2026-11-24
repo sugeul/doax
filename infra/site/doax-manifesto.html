@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="The doax manifesto — Delegation of Object Access and eXecution: how AI agents act on behalf of a human, and how every act is proven.">
+<meta name="description" content="The doax manifesto — Delegation of Object Access and eXecution: how AI agents and every other Ephemeral Delegated Actor act on behalf of a human, and how every act is proven.">
 <title>The doax manifesto</title>
 <style>
     :root {
@@ -102,7 +102,8 @@
     <p class="acronym"><b>D</b>elegation of <b>O</b>bject <b>A</b>ccess and e<b>X</b>ecution</p>
     <p class="lede">
         doax is a registry of the data and action resources that AI agents use on behalf of a human.
-        An agent may act for you only as far as you delegated, and every act it takes leaves proof.
+        Every agent, API call or browsing session that acts uncoupled from you is an <strong>Ephemeral Delegated Actor (EDA)</strong>:
+        it may act for you only as far as you delegated, and every act it takes leaves proof.
         It works like npm, but for what an agent is allowed to do: resolve, verify, tier, invoke, audit.
     </p>
 
@@ -130,7 +131,7 @@
     <div class="pillars">
         <div class="pillar">
             <h3>Delegation</h3>
-            <p>How a person hands an operation to an agent, and within what limits. The agent acts as that person's principal. It reaches only the operations the resource exposes, and it must meet the authentication tier the resource demands. A tier-1 resource still needs the human every time.</p>
+            <p>How a person hands an operation to an Ephemeral Delegated Actor (an agent, an API call, a browsing session), and within what limits. The EDA holds no authority of its own: it acts as that person's principal, only for as long as the delegation lasts. It reaches only the operations the resource exposes, and it must meet the authentication tier the resource demands. A tier-1 resource still needs the human every time.</p>
         </div>
         <div class="pillar">
             <h3>Attestation</h3>
@@ -281,6 +282,7 @@
         <tr><td>Code Repository</td><td>Immutable package storage.</td></tr>
         <tr><td>Auth Server</td><td>Sign-in and offline-verifiable tokens, scoped to the registry or to one provider.</td></tr>
         <tr><td>Provider</td><td>The service behind a <code>server</code> resource, run by its namespace's owner. It enforces the tier and approvals itself and writes the central audit of its namespace's resources under its own service identity. The first one in production fronts an organization's finance system on that organization's private registry.</td></tr>
+        <tr><td>MCP Gateway</td><td>The registry's MCP face for web agents (<code>mcp.doax.io</code>), run by the registry's operator and paired with that one registry. The gateway acting for one agent's session is an untrusted executor: it enforces no tier and keeps only what authenticators issued, in the caller's cookie or, encrypted under the caller's registry token, in its own store.</td></tr>
         <tr><td>Executor host</td><td>An org-operated machine for <code>trusted-executor</code> work that must run inside a company's network. Scaffold only.</td></tr>
     </table></div>
     <p>
@@ -372,6 +374,7 @@
         <li>Hosted executors and <code>trusted-executor</code> dispatch. Today a resource runs on the caller's device or, as a <code>server</code> resource, at its own provider.</li>
         <li>Verification review. Resources show a verification status, but nobody reviews them yet.</li>
         <li>Access control for doax-app. Any signed-in user can view any deployed app.</li>
+        <li>The MCP Gateway's own state store. Today the gateway keeps a caller's state in their cookie.</li>
     </ul>
 
     <h2 id="machine-readable">Machine-readable</h2>

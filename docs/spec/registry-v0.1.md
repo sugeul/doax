@@ -10,7 +10,11 @@ This document describes **what** the system does and **what guarantees** it prov
 
 ## 1. Purpose
 
-The Registry is a catalog of **interfaces that AI agents may use on behalf of a human**. Every interface is a *Resource* and is one of four kinds:
+The Registry is a catalog of **interfaces that AI agents may use on behalf of a human**.
+
+doax governs the delegation between a human and an **Ephemeral Delegated Actor** (EDA): any agent, API call, or browsing session that can act uncoupled from the real person. The human delegates authority to an EDA; the EDA acts for the human, accessing and executing Resources. The Registry makes that delegation bounded (the Tier a Resource demands, §7) and proven (the audit of every act, §8).
+
+Every interface is a *Resource* and is one of four kinds:
 
 - **Data Source** — something an agent reads.
 - **Action** — something an agent executes, producing effects in an external system.
@@ -49,6 +53,7 @@ The Registry is modeled on package registries (npm, Docker Hub, GitHub) rather t
 | **Application** | A program other than an Executor CLI or an Executor Resource that invokes a `server` Resource on a Principal's behalf: a web portal, a hosted app, a service. A Provider records it as the *caller* (§4.6, §8.2a). |
 | **Approval** | One human decision bound to one exact request of a gated Action (§6.4): a single-use confirmation (§4.7) signed by the Authenticator service of the Action's namespace, which the executing party checks before `execute`. |
 | **Principal** | An authenticated human or service account. |
+| **Ephemeral Delegated Actor (EDA)** | Any actor that acts for a human while uncoupled from them: an agent, an API call, a browsing session. It holds no authority of its own, only what a Principal delegated, for as long as that delegation lasts. An EDA acts through an Executor (§9, §9A) and, like the Executor, is not trusted (§7.3). |
 | **Caller** | The Principal on whose behalf a Resource is being invoked. In an operation's context (§4.6), the party that presented the invocation: a device, an Executor Resource, or an Application. |
 | **Tier** | One of the four authentication tiers defined in §7. |
 | **Private Registry** | A Registry Server instance operated by one organization, typically on-premises. |
@@ -498,7 +503,7 @@ An Auth Server MUST publish the material needed to verify its tokens offline (it
 
 Tiers are ordered from strongest (Tier 1) to weakest (Tier 4).
 
-**Who enforces a Tier.** A Tier is enforced by the party that issues what it guards: the Registry for Registry tokens (§7.2), the Authenticator service for target credential material and per-call authorization (§4.7), and the Provider for a `server` Resource (§6.4). The Executor — an Executor CLI, a gateway, an agent — runs on the caller's side and is not trusted. Every enforcing party MUST assume a call reaches it unauthenticated and unauthorized, and MUST NOT accept the Executor's assertion that an authentication or authorization took place. What an Executor does at a Tier — prompting, waiting, relaying a pending interaction (§7.8) — is the interaction surface, not the control.
+**Who enforces a Tier.** A Tier is enforced by the party that issues what it guards: the Registry for Registry tokens (§7.2), the Authenticator service for target credential material and per-call authorization (§4.7), and the Provider for a `server` Resource (§6.4). The Executor — an Executor CLI, an MCP Gateway acting for a caller's session (§9A.1), an agent — runs on the caller's side and is not trusted. Every enforcing party MUST assume a call reaches it unauthenticated and unauthorized, and MUST NOT accept the Executor's assertion that an authentication or authorization took place. What an Executor does at a Tier — prompting, waiting, relaying a pending interaction (§7.8) — is the interaction surface, not the control.
 
 **Authentication and authorization are distinct.** Authentication establishes who the caller is to the target; authorization decides whether this one invocation may proceed. The Authenticator service takes authorization through `confirm` (§4.7), which signs the person in within the same interaction when they are not authenticated and otherwise asks for the authorization alone.
 
@@ -547,7 +552,7 @@ An Auth Server's role is limited to asserting **who the Principal is and which n
 
 ### 7.6 Credential handling
 
-- Credentials for external systems (the caller's login to a ticketing site, an ERP, a SaaS) MUST be stored only on the device where execution occurs: the caller's device for `caller-device` Resources, the trusted executor machine for `trusted-executor` Resources, the Provider's own systems for `server` Resources.
+- Credentials for external systems (the caller's login to a ticketing site, an ERP, a SaaS) MUST be stored only on the device where execution occurs: the caller's device for `caller-device` Resources, the trusted executor machine for `trusted-executor` Resources, the Provider's own systems for `server` Resources, the Gateway's caller state (§9A.4) for a Resource an MCP Gateway runs.
 - Such credentials MUST NOT be transmitted to or stored by the Registry Server, the Code Repository, or the Auth Server.
 - The cache is keyed by caller and Authenticator, never by Resource, so that every Resource referencing the same Authenticator uses the same cached material and a purge of one Authenticator's material affects all of them at once.
 - The Executor MUST provide a command to list cached credentials by Authenticator, showing which Resources reference each, and to purge them.
@@ -579,7 +584,7 @@ The exchange runs between the Executor and the Authenticator service alone. No s
 
 1. **Start.** The Executor calls `confirm` (or `authenticate` in mode `initial` or `step-up`, for authentication alone) with the effective Tier and a **challenge**: the `sha256` of a random verifier of at least 128 bits that the Executor keeps. `confirm` also carries the **invocation descriptor** `{resource, operation, requestHash}`, where `requestHash` is computed as in §6.4; for a gated Action the executing party starts it with its own summary (§6.4). The descriptor lets the Authenticator service show the person exactly what they are asked to allow and bind the confirmation to that invocation.
 2. **Pending.** The Authenticator service answers `pending` with an entry point for the person, an opaque **handle**, a poll interval, and an expiry. The handle is unguessable and grants nothing by itself.
-3. **Relay.** The Executor brings the entry point to the person: a terminal prints or opens it; a surface serving an agent returns it as the result of the call, and the agent re-invokes the same operation later. An Executor that keeps no state between calls (a gateway) hands the handle and verifier to its own caller to carry back, and is no more trusted for it (§7.3).
+3. **Relay.** The Executor brings the entry point to the person: a terminal prints or opens it; a surface serving an agent returns it as the result of the call, and the agent re-invokes the same operation later. An MCP Gateway keeps the handle and verifier in its caller state (§9A.4), and is no more trusted for it (§7.3).
 4. **Decision.** The person completes the step at the entry point, which is the Authenticator service's own page. It identifies the person by its own means (a sign-in the target trusts) and, for `confirm`, takes their decision on the described invocation — signing them in first within the same interaction when they are not authenticated or the Tier demands it afresh (§4.7).
 5. **Collection.** The Executor calls the same operation again with the handle and the verifier. The Authenticator service returns the result only when the verifier matches the challenge, so a party that saw the entry point or the handle cannot collect it. Until the decision it answers `pending`; after the expiry or a refusal it fails, and it MUST NOT answer `pending` indefinitely. A handle is collected **once**.
 6. **Use.** The verifier the Authenticator declares (§4.7.1, *authorization enforcement*) accepts a confirmation once, for the invocation it describes, recomputing the request hash from the request in hand wherever it sees the request. At Tier 1 the Executor discards any credential material that came with it after that one use; at Tier 2 the confirmation MAY carry an authorization token (§7.4a).
@@ -724,6 +729,50 @@ The Executor MUST:
 - The Executor CLI MUST NOT hand credential material from one Authenticator to a Resource that references a different Authenticator.
 - The Executor MUST invoke a Resource only through Fixed Interface operations mapped in its Manifest (§4.6). It MUST NOT enumerate or call unmapped MCP tools, even when the underlying server advertises them.
 - The Executor CLI MUST present a Registry token only to the Registry that issued it, and a Provider token only to that Provider (§7.2).
+
+---
+
+## 9A. MCP Gateway
+
+### 9A.1 Definition
+
+An **MCP Gateway** serves one Registry's catalog to agents over MCP on HTTP. The Gateway itself is managed with its Registry: deployed and operated by the Registry's operator as that Registry's MCP face (§9A.2), holding the secret of its store (§9A.5).
+
+The Executor (§9) is not the Gateway alone. It is **the Gateway acting for one caller's session** — the Gateway together with the session held in the caller's agent, an Ephemeral Delegated Actor (§2), which drives every call. That Executor carries out the Executor's responsibilities (§9.1) for the caller, every guarantee of §9.2 applies to it, and it runs on the caller's side and is not trusted (§7.3): what the agent sends is the caller's input, and nothing the Gateway holds or relays for a session is evidence that an authentication or authorization took place. Being managed by the Registry's operator does not make the Gateway an enforcing party. It enforces no Tier, and the Registry, the Authenticator service, and the Provider each treat a call from it as a call from any Executor.
+
+### 9A.2 Pairing with its Registry
+
+A Gateway is paired with exactly one Registry. It MUST forward a caller's Registry token only to that Registry's origin (§9.2). When it offers MCP login, it MUST name that Registry's Auth Server as its only authorization server. It MUST NOT forward a token to a Registry whose Auth Server did not issue it.
+
+### 9A.3 Caller identity
+
+The Registry token on each request identifies the caller. A Gateway that keeps caller state in its own store (§9A.5) MUST verify that token offline (§7.2) — its signature, an issuer the paired Registry trusts, and its expiry — and MUST key the caller's state to the verified principal (issuer and principal), never to an unverified claim. Entries are found by the verified principal and opened only with the token in hand (§9A.5). A request without a valid token reaches no stored state.
+
+### 9A.4 Caller state
+
+Between requests, a Gateway keeps the following per caller, and nothing else:
+
+| Kind | Scope | Source |
+|---|---|---|
+| Credential material | Authenticator `@ns/name` | §4.7, §7.6 |
+| Tier 2 authorization token | Resource `@ns/name` | §7.4a |
+| Poll-login handle | Authenticator `@ns/name` | §4.7.1a |
+| Pending confirmation (handle, verifier) | One call | §7.8 |
+
+The Gateway's operator chooses where this state lives: **held by the caller** (a cookie returned with each request, which requires a client that returns it), **in the Gateway's store** (§9A.5), or both. When both hold an entry, the store's entry is used. Wherever it lives:
+
+- An entry is material the Authenticator service issued, and that service still verifies it on every use. A Gateway MUST NOT keep a mark that a caller is authenticated or authorized, and MUST NOT let an entry substitute for one (§7.3, §9.2).
+- Tier 1 material is not kept past its single use (§7.3).
+- An entry expires no later than the material it holds, the namespace's authorization lifetime for a Tier 2 token (§7.4a), or the pending exchange's expiry (§7.8), whichever comes first.
+- One caller's state is never visible to another caller. Only content-addressed Packages MAY be shared across callers.
+
+### 9A.5 Gateway store
+
+- **One-way keys.** An entry is indexed by a one-way hash of the verified principal, its kind, and its scope; a pending confirmation's scope is a one-way hash of the call. The store holds no recoverable form of the principal, the Registry token, or the call.
+- **Encrypted values.** An entry's value must be presented onward, so it is stored under authenticated encryption. The key is derived from a secret the Gateway holds and the caller's Registry token, salted by the caller's principal. Neither the secret nor the token is stored with the entries, so neither the store alone nor the store with the Gateway's secret recovers an entry. A new Registry token — from a refresh or a new sign-in — is a new session: the caller's earlier entries cannot be decrypted, and the Gateway treats them as absent and replaces them.
+- **The Registry token is never stored.** It arrives with each request.
+- **Expiry.** The store does not serve an expired entry, and removes it. A handle is removed when it is collected (§7.8, step 5).
+- **Listing and purging.** The Gateway MUST let the caller list their entries by Authenticator and purge them, by Authenticator or all at once (§7.6).
 
 ---
 
@@ -884,7 +933,7 @@ This specification imposes no availability or latency target on the Registry Ser
 - Additional logins for the reference Auth Server beyond Google Sign-In.
 - A standardized query interface for Data Sources.
 - Automated verification tooling; v1 verification is a manual status change.
-- Executors other than a command-line program and the Executor Resource.
+- Executors other than a command-line program, the MCP Gateway (§9A), and the Executor Resource.
 - Delivery channels for approval requests (a messenger, mail); v1 defines the approval artifact and its events (§6.4, §8.3) but not how the person is notified.
 - Marketplace features: ratings, billing, discovery ranking.
 

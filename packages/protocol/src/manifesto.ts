@@ -34,7 +34,7 @@ export interface Manifesto {
 }
 
 export const SYSTEM_DESCRIPTION =
-    "doax is a registry of data and action resources that AI agents use on behalf of a human, " +
+    "doax is a registry of data and action resources that AI agents and other Ephemeral Delegated Actors use on behalf of a human, " +
     "with every access audited and every resource declaring the authentication tier it demands.";
 
 export const SPECIFICATION_URL = "https://doax.io/spec";

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="doax 매니페스토 — Delegation of Object Access and eXecution. AI 에이전트가 사람을 대신해 일하는 범위를 정하고, 모든 실행을 기록으로 증명합니다.">
+<meta name="description" content="doax 매니페스토 — Delegation of Object Access and eXecution. AI 에이전트를 비롯한 임시 위임 행위자(EDA)가 사람을 대신해 일하는 범위를 정하고, 모든 실행을 기록으로 증명합니다.">
 <title>doax 매니페스토</title>
 <style>
     :root {
@@ -100,7 +100,8 @@
     <p class="acronym"><b>D</b>elegation of <b>O</b>bject <b>A</b>ccess and e<b>X</b>ecution</p>
     <p class="lede">
         객체 접근과 실행의 위임. doax는 AI 에이전트가 사람을 대신해 쓰는 데이터·액션 리소스의 레지스트리입니다.
-        에이전트는 위임받은 범위 안에서만 움직이고, doax는 그 움직임을 빠짐없이 기록합니다.
+        사람과 떨어져서 움직이는 에이전트, API 호출, 브라우징 세션은 모두 <strong>임시 위임 행위자(Ephemeral Delegated Actor, EDA)</strong>입니다.
+        EDA는 위임받은 범위 안에서만 움직이고, doax는 그 움직임을 빠짐없이 기록합니다.
         npm과 비슷하지만, doax가 다루는 것은 패키지가 아니라 에이전트에게 허락된 일입니다.
         리소스를 찾고(resolve), 검증하고(verify), 등급을 맞춘 뒤(tier) 실행하고(invoke), 그 과정을 기록합니다(audit).
     </p>
@@ -129,7 +130,7 @@
     <div class="pillars">
         <div class="pillar">
             <h3>위임 (Delegation)</h3>
-            <p>사람이 에이전트에게 어떤 일을, 어디까지 맡길지 정합니다. 에이전트는 맡긴 사람의 이름으로 일하지만, 리소스가 허용한 작업만 할 수 있고 리소스가 요구하는 인증 등급을 충족해야 합니다. Tier 1 리소스는 매번 사람이 직접 로그인하거나 동의해야 합니다.</p>
+            <p>사람이 임시 위임 행위자(EDA), 즉 에이전트·API 호출·브라우징 세션에게 어떤 일을, 어디까지 맡길지 정합니다. EDA에게는 자기 권한이 없습니다. 맡긴 사람의 이름으로, 위임이 유효한 동안에만 일합니다. 리소스가 허용한 작업만 할 수 있고 리소스가 요구하는 인증 등급을 충족해야 합니다. Tier 1 리소스는 매번 사람이 직접 로그인하거나 동의해야 합니다.</p>
         </div>
         <div class="pillar">
             <h3>증명 (Attestation)</h3>
@@ -282,6 +283,7 @@
         <tr><td>Code Repository</td><td>불변 패키지 보관.</td></tr>
         <tr><td>Auth Server</td><td>로그인 처리와 토큰 발급. 토큰은 오프라인으로 검증할 수 있고, 레지스트리용인지 특정 제공자용인지가 정해져 있습니다.</td></tr>
         <tr><td>제공자(Provider)</td><td><code>server</code> 리소스 뒤에 있는 서비스. 네임스페이스 소유자가 운영합니다. 등급과 승인을 스스로 강제하고, 자기 네임스페이스 리소스의 중앙 감사 기록을 자기 서비스 신원으로 씁니다. 운영 중인 첫 제공자는 한 조직의 재무 시스템으로, 그 조직의 비공개 레지스트리에 올라 있습니다.</td></tr>
+        <tr><td>MCP 게이트웨이</td><td>웹 에이전트를 위한 레지스트리의 MCP 창구(<code>mcp.doax.io</code>). 레지스트리 운영자가 운영하며, 짝이 되는 레지스트리 하나에만 연결됩니다. 에이전트의 세션 하나를 대신해 움직이는 게이트웨이는 신뢰할 수 없는 실행 주체입니다. 어떤 등급도 강제하지 않고, 인증기(authenticator)가 발급한 것만 보관합니다. 보관 위치는 호출자의 쿠키이거나, 호출자의 레지스트리 토큰으로 암호화한 게이트웨이 자체 저장소입니다.</td></tr>
         <tr><td>Executor host</td><td>회사 네트워크 안에서 실행해야 하는 <code>trusted-executor</code> 작업을 위해 조직이 직접 운영하는 서버. 아직 뼈대만 있습니다.</td></tr>
     </table></div>
     <p>
@@ -371,6 +373,7 @@
         <li>호스팅 실행 서버와 <code>trusted-executor</code> 작업 위임. 지금 리소스는 호출자의 기기에서 실행되거나, <code>server</code> 리소스로서 자기 제공자에서 실행됩니다.</li>
         <li>검증 심사. 검증 상태는 표시되지만, 실제로 심사하는 사람은 아직 없습니다.</li>
         <li>doax-app 접근 제어. 지금은 로그인한 사람이라면 누구나 배포된 앱을 볼 수 있습니다.</li>
+        <li>MCP 게이트웨이 자체 저장소. 지금 게이트웨이는 호출자의 상태를 쿠키에 보관합니다.</li>
     </ul>
 
     <h2 id="machine-readable">기계용 매니페스토</h2>

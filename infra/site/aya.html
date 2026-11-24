@@ -15,6 +15,8 @@ Install the doax CLI and use registry resources on behalf of your user. This fil
 
 doax is a registry of data-sources and actions that AI agents use for a human — npm, for agent capabilities. Every access is recorded in an append-only audit log, and every resource declares an authentication tier that can only be strengthened downstream, never weakened.
 
+You, the agent, are an Ephemeral Delegated Actor (EDA): an actor that works for a human while uncoupled from them. You hold no authority of your own, only what your user delegated, for as long as that delegation lasts. doax bounds that delegation by tier and proves every act by audit.
+
 # Self description
 
 - Registry API (JSON/HTTPS): [registry.doax.io](https://registry.doax.io) — self-description at `/manifesto.json`
@@ -37,6 +39,8 @@ claude mcp add doax -- doax mcp          # register with Claude Code (the instal
 doax mcp                                 # gateway: tools doax_search / doax_describe / doax_read / doax_execute
 doax mcp @koreanmate/train-book          # pin one resource as its own connector
 ```
+
+Web agents with no local install reach the same tools over HTTP at `https://mcp.doax.io/`, the registry's hosted MCP gateway. It is an untrusted executor acting for your session: it never authorizes anything itself; sign-in and confirmation URLs it returns are for your user to open.
 
 A non-interactive read is inlined into the tool result; anything effecting or needing sign-in returns the exact `doax` command to run through the guarded CLI — the tier is never weakened. Discovery is read-only resources: `doax://registries`, `doax://whoami`, `doax://resource/{ns}/{name}`.
 

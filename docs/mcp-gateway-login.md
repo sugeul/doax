@@ -1,5 +1,7 @@
 # No pasted tokens for hosted resources over the MCP Gateway
 
+The normative rules for the MCP Gateway (pairing, caller identity, caller state, the Gateway store) are in spec §9A ([registry-v0.1.md](spec/registry-v0.1.md)); this document is the proposal history and operator guide.
+
 Status: Change A's **gateway half is implemented and deployed** (`apps/mcp-gateway`): the 401 and the
 RFC 9728 metadata, off by default. The registry's OAuth endpoints (Change A, auth-server half) and
 Change B are not yet implemented — a registry operator builds their half; see the operator guide below.
