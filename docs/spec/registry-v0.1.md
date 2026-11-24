@@ -42,11 +42,12 @@ The Registry is modeled on package registries (npm, Docker Hub, GitHub) rather t
 | **Registry Server** | The service that stores Manifests, resolves Resources, enforces namespace visibility, and ingests audit events. |
 | **Code Repository** | The service that stores Packages by immutable version. |
 | **Auth Server** | Whatever issues Registry tokens (§7.2) for a given Registry. The public Registry's Auth Server uses Google Sign-In; a Private Registry MAY run any Auth Server that issues conforming tokens. |
-| **Executor CLI** | The client on a caller's device that fetches a Resource, runs the authorization flow, invokes the Resource or dispatches it to an Executor Resource, and keeps the caller's own audit log. In v1 a command-line program. |
+| **Authenticator service** | The service, off the caller's device, that mints an Authenticator's credential material and takes its identification and authorization decisions: the Authenticator's own backend or the target's identity provider (§4.7, §7.3). |
+| **Executor CLI** | The client on a caller's device that fetches a Resource, relays the authentication and authorization interactions that Authenticator services require, invokes the Resource or dispatches it to an Executor Resource, and keeps the caller's own audit log. In v1 a command-line program. |
 | **Executor Resource** | A Resource of kind `executor`: an organization-operated machine registered in the Registry that accepts dispatched work. Where this document says "trusted executor", it means an Executor Resource. |
 | **Provider** | The service that answers a `server`-location Resource's operations (§6.5), operated by or for its namespace's owner. A namespace MAY register its Providers with the Registry (§10); a registered Provider enforces Tier and approvals itself (§6.5) and writes the audit of every `server` Resource of its namespace under its own service identity (§8.2a). |
 | **Application** | A program other than an Executor CLI or an Executor Resource that invokes a `server` Resource on a Principal's behalf: a web portal, a hosted app, a service. A Provider records it as the *caller* (§4.6, §8.2a). |
-| **Approval** | One human decision bound to one exact request of a gated Action (§6.4): a signed, single-use artifact issued by the Registry that a Provider checks before `execute`. |
+| **Approval** | One human decision bound to one exact request of a gated Action (§6.4): a single-use confirmation (§4.7) signed by the Authenticator service of the Action's namespace, which the executing party checks before `execute`. |
 | **Principal** | An authenticated human or service account. |
 | **Caller** | The Principal on whose behalf a Resource is being invoked. In an operation's context (§4.6), the party that presented the invocation: a device, an Executor Resource, or an Application. |
 | **Tier** | One of the four authentication tiers defined in §7. |
@@ -148,6 +149,7 @@ Every Resource MUST expose the **Fixed Interface**: a closed, pre-determined set
 |---|---|---|---|
 | `describe` | all | Return the Resource's self-description; MUST be consistent with the published Manifest | 4.3 |
 | `authenticate` | authenticator | Obtain, refresh, or verify the caller's credentials for the target system. Distinct from Registry authentication (§7.1). | 4.7 |
+| `confirm` | authenticator | Obtain the person's authorization for one invocation, signing them in within the same interaction when they are not yet authenticated | 4.7 |
 | `metadata` | data-source | Return `{ schema, metadata }` for the one collection, caller-relative | 5.2a, 5.3 |
 | `read` | data-source | Return an array of records (§5.7). The parameter schema for `read` is declared per Resource in the Manifest; the Registry does not standardize parameter semantics (§5.4) | 5.4, 5.7 |
 | `dry-run` | action | Perform the declared dry-run mode | 6.1 |
@@ -180,10 +182,10 @@ An **Authenticator** is a Resource of kind `authenticator` that knows how one ta
 
 Division of responsibility:
 
-- The **Authenticator** drives the flow: it tells the Executor CLI what interaction is required (none, open a browser-based login, show a device code, accept a secret) and produces the credential material.
-- The **Executor CLI** provides the interaction surface, caches the credential material, and supplies it to referencing Resources' operations.
+- The **Authenticator** drives the flow and owns its decisions: it tells the Executor CLI what interaction is required (none, open a browser-based login, show a device code, accept a secret), identifies the person to the target system, decides whether an invocation is authorized at the Tier it runs at (§7.3), and produces credential material that the target accepts only within what it decided. A decision that must hold against the caller is taken by the **Authenticator service** — the service, off the caller's device, that mints the credential material: the Authenticator's own backend or the target's identity provider — never by Authenticator code running on the caller's device.
+- The **Executor CLI** provides the interaction surface, relays pending interactions (§7.8), caches the credential material, and supplies it to referencing Resources' operations. It enforces nothing on the Authenticator's behalf (§7.3).
 - The **referencing Resource** receives credential material as input to its operations and MUST NOT perform target authentication on its own.
-- The **Registry Server** never sees target credentials and has no role in this operation.
+- The **Registry Server** never sees target credentials and takes no identity or authorization decision in this operation. It MAY hold the intermediate state of a pending interaction for an Authenticator service (§7.8), as storage only.
 
 Every Authenticator MUST declare a **subject**:
 
@@ -204,7 +206,9 @@ Every Authenticator MUST declare a **subject**:
 
 Every call to `authenticate` MUST produce an `auth` audit event (§8.3) recording the Authenticator, the mode, and the outcome, but never the credential material.
 
-An Authenticator has its own required Tier (§7.3), which governs who may obtain credentials through it. The effective Tier of a Resource operation includes its Authenticator's Tier (§7.4). For Tier 1 Resources, the Executor CLI MUST call the Authenticator in mode `initial` or `step-up` at every invocation, so that target authentication is interactive each time regardless of what is cached.
+**`confirm`** obtains the person's authorization for one invocation, named by its invocation descriptor (§7.8). Authentication and authorization are distinct (§7.3), but `confirm` does not require a prior `authenticate`: when the person is not authenticated — or the Tier demands a fresh authentication — the Authenticator service signs them in within the same interaction and takes both at once; when they are, it asks for the authorization alone, a lighter interaction than signing in again. Its result is a **confirmation**: material the Authenticator service issues and signs, carrying the subject who confirmed, the resource, the operation, the request hash, the audience that is to accept it, an expiry, and a single-use id; it MAY also carry credential material when a sign-in took place. `confirm` is required of an Authenticator that serves operations at Tier 1 or 2. Every terminal `confirm` outcome MUST produce an `approve` or `reject` audit event (§8.3).
+
+An Authenticator has its own required Tier (§7.3), which governs who may obtain credentials through it. The effective Tier of a Resource operation includes its Authenticator's Tier (§7.4). At effective Tier 1 the Executor CLI calls `confirm` at every invocation, and the Authenticator service authenticates the person afresh within it; at Tier 2 it calls `confirm` whenever it holds no authorization still within its lifetime (§7.4a). The Executor calling is not the control: the Authenticator service MUST NOT issue material that lets a Tier 1 invocation proceed without that invocation's own interactive authentication and confirmation, or a Tier 2 invocation without a live authorization (§7.3).
 
 A Resource whose target needs no authentication declares `authenticator: none`; it receives no credential material and no `auth` event is produced for it.
 
@@ -226,6 +230,7 @@ The Executor CLI cannot run an authentication flow it does not understand. There
 | Lifetime | Declared validity period of the credential material, or `unknown`. Whether it can be refreshed without user interaction, and if so how `refresh` mode behaves. |
 | Verification method | How `verify` mode determines validity without side effects. |
 | Step-up behavior | What `step-up` mode requires beyond `initial`: a repeated login, an additional factor, or "same as initial". |
+| Authorization enforcement | How a confirmation is held to what it confirmed (§7.3): who verifies it (the Authenticator service itself, a Provider, or the target); whether that verifier sees the actual request and so binds the confirmation to its request hash, or can bind it only to a short lifetime and narrow scope (a target that accepts a bearer credential alone); how its reuse is refused; how a Tier 2 authorization's lifetime is bounded (§7.4a); or `none` when it enforces none of these. |
 | Required inputs | Any information the Executor CLI must collect from the user before starting (for example, which account among several to use). |
 | Scope requested | For `consent-redirect`: the permissions requested from the target system, listed so a reviewer can judge whether they are proportionate to the Resources that reference this Authenticator. |
 | Revocation | How the user or operator revokes the credential at the target system, as a human-readable instruction. |
@@ -234,6 +239,7 @@ Requirements:
 
 - The Executor CLI MUST refuse to use an Authenticator whose Manifest lacks any mandatory item above, and MUST refuse to run a Resource whose referenced Authenticator cannot be resolved.
 - The Executor CLI MUST use only the interaction kinds declared; an Authenticator MUST NOT request an undeclared interaction at run time.
+- An Authenticator whose authorization enforcement is `none` cannot hold an invocation to Tier 1 or 2. The Registry MUST refuse to publish a Resource whose required Tier is 1 or 2 and that references such an Authenticator, and MUST refuse a namespace Tier floor of 1 or 2 while the namespace's Authenticator declares `none`.
 - Verification review (§4.5) of an Authenticator assesses `scope requested` against the operations of the Resources that reference it. An Authenticator whose scopes are broader than any referencing Resource needs SHOULD NOT receive `verified` status, and a Resource SHOULD NOT receive `verified` status while referencing an unverified Authenticator.
 - The specification is descriptive of the flow, not an implementation of it.
 
@@ -241,13 +247,15 @@ Requirements:
 
 `poll-login` is the non-blocking counterpart to `browser-login`, for an Executor that cannot hold a connection open for the duration of a web login — for example a request/response surface such as an MCP gateway, where the caller re-invokes the operation to collect the result. It lets a user sign in through a web page instead of copying a token, while reusing the same `authenticate` endpoint.
 
-In `poll-login`, `authenticate` in mode `initial` or `step-up` MAY return a **pending** result — the entry point to open and an opaque continuation handle — instead of credential material. The Executor CLI opens the entry point (a terminal prints or launches the login URL; a web surface returns it to the caller), and then calls `authenticate` again, in the same mode, carrying the handle. The Authenticator returns the credential material once the web login has completed, or a pending result again until the declared maximum wait elapses, after which it MUST fail rather than return pending indefinitely. A pending result carries no credential material and is not itself a credential.
+In `poll-login`, `authenticate` in mode `initial` or `step-up`, and `confirm`, MAY return a **pending** result — the entry point to open and an opaque continuation handle — instead of credential material. The Executor CLI opens the entry point (a terminal prints or launches the login URL; a web surface returns it to the caller), and then calls the same operation again, in the same mode, carrying the handle. The Authenticator returns the credential material or confirmation once the web interaction has completed, or a pending result again until the declared maximum wait elapses, after which it MUST fail rather than return pending indefinitely. A pending result carries no credential material and is not itself a credential.
 
 The interaction details for `poll-login` MUST give the entry point, the poll interval, and the maximum wait. The `auth` audit event (§8.3) is produced on the terminal outcome (credential issued, declined, or timed out), not on each intervening poll.
 
 An Authenticator MAY offer `secret-entry`, `poll-login`, or both. Each client then uses whichever it supports and finds convenient — a terminal that can open a browser polls; a client where supplying a token directly is simpler takes that. The credential material produced, its lifetime, verification, and everything downstream are identical whichever the client uses.
 
 The web login `poll-login` performs is the target system's own (for example a Google SSO the target trusts): the Authenticator uses that sign-in to establish the user's identity, decides whether the user is authorized, and issues its own credential material for the target. That credential is distinct from any Registry token and from the identity token consumed during sign-in (§7.2 audience rules); `poll-login` does not exchange one for another.
+
+`poll-login` is one use of the pending exchange in §7.8, which governs the invocation descriptor, the handle and its binding to the Executor that started it, asynchronous completion, and where the pending state is kept.
 
 ---
 
@@ -358,11 +366,11 @@ Recovery is explicitly **not** an undo. It is a forward action with its own effe
 
 ### 6.4 Human-in-the-loop gating and the approval artifact
 
-An Action MAY declare that execution requires an out-of-band approval. Such an Action MUST declare Tier 1 or Tier 2 (§7.3). The approval is an audit event (§8.3), and for a `server` Resource it is also an **artifact** the Provider can check: one human decision bound to one exact request.
+An Action MAY declare that execution requires an out-of-band approval. Such an Action MUST declare Tier 1 or Tier 2 (§7.3). The approval is a **confirmation** (§4.7) issued by the Authenticator service of the Action's own namespace: one human decision bound to one exact request, checked by the party that runs the Action. No step involves the Registry, so a gated Action reached without a Registry (an Application invoking a Provider directly) is gated the same way.
 
-1. **Request hash.** On `dry-run`, the Provider computes the request hash: `sha256` of the canonical JSON (keys sorted recursively, no whitespace) of `{resource: "@namespace/name", operation: "execute", input: <the normalized input>}`. It then asks the Registry for an approval, giving the Resource, the operation, the request hash, the Principal who is to decide (*requested for*), and a plain-language summary of what will happen. Only a registered Provider (§10) MAY ask, so the summary a person approves is the Provider's, not the agent's.
-2. **Decision.** The Registry returns an approval id and a page. The person named decides there with a **fresh interactive sign-in**: an identity-provider credential minted moments ago, not a Registry token. An agent that holds the Principal's token therefore cannot decide. The Registry records an `approve` or `reject` event (§8.3) linked to the approval id, and the decision stands once; it cannot be changed. An undecided approval expires after a period the Registry declares.
-3. **Consumption.** On `execute`, the caller passes the approval id. The Provider fetches the approval from the Registry with its own identity and receives a **signed approval token** carrying the approval id, the approver, the Resource, the operation, the request hash, the Provider as audience, and an expiry. The Provider MUST accept it only if the signature, audience, Resource, operation, and request hash match the request in hand and the approver is the acting Principal, and MUST accept it **once**: an approval is single use, enforced by the Provider. A retry carrying a used approval returns the first result, which makes the approval the idempotency key of a gated `execute` (§6.2).
+1. **Request hash.** On `dry-run`, the party that will execute — the Provider for a `server` Resource — computes the request hash: `sha256` of the canonical JSON (keys sorted recursively, no whitespace) of `{resource: "@namespace/name", operation: "execute", input: <the normalized input>}`. It starts `confirm` (§7.8) with that hash and a plain-language summary of what will happen, and returns the pending entry point to the caller. The summary the person reads is the executing party's, not the agent's.
+2. **Decision.** The person decides at the Authenticator service's page. It identifies them by its own sign-in — taken in the same interaction when they are not signed in, and always afresh at Tier 1 — so an agent holding the caller's tokens cannot decide. The Authenticator service records `approve` or `reject` (§8.3), and the decision stands once; it cannot be changed. An undecided confirmation expires after a period the Authenticator declares.
+3. **Consumption.** On `execute`, the caller presents the confirmation. The Provider verifies it with the Authenticator service's verification key, which it trusts by its own configuration and not through the Registry. It MUST accept the confirmation only if the signature and audience are valid, the resource and operation match, the request hash it **recomputes from the request in hand** matches, and the subject is the caller it authenticated; and it MUST accept it **once**: a confirmation is single use, enforced by the Provider. A retry carrying a used confirmation returns the first result, which makes the confirmation's id the idempotency key of a gated `execute` (§6.2).
 
 The agent may prepare everything; only the person can make it happen. How the person is notified (a messenger, mail) is not specified (§14).
 
@@ -378,7 +386,7 @@ Every Data Source, Action, and Authenticator MUST declare where it runs (an Exec
 
 `trusted-executor` and `server` differ in who provides the runtime: a shared §6A Executor Resource for the former, the Resource's own operator for the latter. Both run server-side and write the central audit; only `caller-device` work stays off it. Scheduled or unattended Actions (for example, nightly data refresh) MUST declare `trusted-executor` or `server`.
 
-**Enforcement for `server` Resources.** The Executor CLI's authorization flow (§9.1) runs on the caller's device, which the caller controls: a browser can be edited and a CLI run with a flag that answers its own prompts. That is acceptable for reads of public data and not for writes to a system of record. A `server` Resource therefore MUST NOT rely on it. Its Provider is the enforcing party and MUST, on every invocation it serves: verify the caller's token (§7.2), including that the token was issued for this Provider; map the request to a Resource and operation; apply the Resource's declared Tier from a Manifest it trusts (its own published Manifest, pinned by digest); require an approval (§6.4) where the effective Tier is 2 or stronger; and write the audit event itself (§8.2a). The Executor CLI's checks stay in force for what the Executor does; they are the first gate, not the last. A `server` Resource invoked by an Application (§2) is held to the same rules, with the Application as *caller*.
+**Enforcement for `server` Resources.** The Executor CLI's authorization flow (§9.1) runs on the caller's device, which the caller controls: a browser can be edited and a CLI run with a flag that answers its own prompts. That is acceptable for reads of public data and not for writes to a system of record. A `server` Resource therefore MUST NOT rely on it. Its Provider is the enforcing party and MUST, on every invocation it serves: verify the caller's credential — a token issued for this Provider (§7.2), or material its own namespace's Authenticator service issued (§4.7); map the request to a Resource and operation; apply the Resource's declared Tier from a Manifest it trusts (its own published Manifest, pinned by digest); require a confirmation (§4.7, §6.4) where the effective Tier is 2 or stronger; and write the audit event itself (§8.2a). What the Executor does is the interaction surface, not a gate (§7.3). A `server` Resource invoked by an Application (§2) is held to the same rules, with the Application as *caller*.
 
 ### 6.6 Out-of-band payloads
 
@@ -490,10 +498,14 @@ An Auth Server MUST publish the material needed to verify its tokens offline (it
 
 Tiers are ordered from strongest (Tier 1) to weakest (Tier 4).
 
+**Who enforces a Tier.** A Tier is enforced by the party that issues what it guards: the Registry for Registry tokens (§7.2), the Authenticator service for target credential material and per-call authorization (§4.7), and the Provider for a `server` Resource (§6.4). The Executor — an Executor CLI, a gateway, an agent — runs on the caller's side and is not trusted. Every enforcing party MUST assume a call reaches it unauthenticated and unauthorized, and MUST NOT accept the Executor's assertion that an authentication or authorization took place. What an Executor does at a Tier — prompting, waiting, relaying a pending interaction (§7.8) — is the interaction surface, not the control.
+
+**Authentication and authorization are distinct.** Authentication establishes who the caller is to the target; authorization decides whether this one invocation may proceed. The Authenticator service takes authorization through `confirm` (§4.7), which signs the person in within the same interaction when they are not authenticated and otherwise asks for the authorization alone.
+
 | Tier | Name | Behavior at invocation time |
 |---|---|---|
-| 1 | Interactive authentication | The caller MUST authenticate interactively (a login or consent prompt is shown) at every invocation. No authorization token is issued for Tier 1: no lifetime, flag, or configuration lets one invocation's authentication stand for the next. |
-| 2 | Long-lived authentication, per-call authorization check | A valid long-lived token suffices for identity; authorization for an invocation MUST be confirmed before proceeding, unless a Tier 2 authorization token for the same Resource is still within its lifetime (§7.4a), in which case the Executor MAY proceed without re-confirming. The token is scoped to a single Resource and never crosses Resources or namespaces. For a `caller-device` Resource the Executor asks the caller (§9.1); for a `server` Resource the Provider requires an approval (§6.4) that the Executor cannot produce on its own. |
+| 1 | Interactive authentication and authorization | Every invocation is authenticated and confirmed interactively (`confirm` with a fresh sign-in, §4.7, §7.8). The confirmation is bound to that one invocation and its reuse is refused: no lifetime, flag, or configuration lets one invocation's authentication or authorization stand for the next. No authorization token is issued for Tier 1. |
+| 2 | Long-lived authentication, per-call authorization | A valid long-lived authentication suffices for identity; authorization for an invocation MUST be given before it proceeds, unless an authorization granted for the same Resource is still within its lifetime (§7.4a). The authorization is a confirmation from the Authenticator service (`confirm`, §4.7), which a `server` Resource's Provider verifies itself (§6.4). The Executor cannot produce one. |
 | 3 | Long-lived authentication, no per-call check | A valid long-lived token suffices; no further check is made. The audit record is the only control. |
 | 4 | Unauthenticated execution | No Principal is required. The Executor MUST still record an audit event with an anonymous actor marker. |
 
@@ -518,14 +530,14 @@ effective_tier = strongest of (
 
 ### 7.4a Tier 2 authorization token
 
-A Tier 2 authorization is a **token with a lifetime, not a session**. When a caller confirms authorization for a Tier 2 Resource, that confirmation is held as an **authorization token** scoped to that one Resource; while the token is within its lifetime, further invocations of the same Resource proceed without re-confirming. Verification is the token's expiry alone — no party, client or server, keeps session state. Any Executor holds its own token (an agent, an Application, or a CLI); it is a protocol artifact, not a property of one client.
+A Tier 2 authorization is **a grant with a lifetime, not a session**. When the person confirms a Tier 2 invocation (`confirm`, §4.7), the Authenticator service MAY let that authorization stand for further invocations of the same Resource until it expires, by issuing material that carries it — an **authorization token** — which the Authenticator service or the target verifies on every use. The Executor holds the token with the caller's credential material (§7.6) and presents it; it never mints, extends, or verifies one, and holding one is not evidence that the Executor may proceed (§7.3).
 
-- The lifetime is **bounded by namespace policy**, which sets the maximum — seconds up to a few hours — exactly as a namespace MAY shorten any token's effective lifetime (§7.2). Nothing outside the namespace policy MAY lengthen it, and the caller MAY always re-confirm sooner.
-- The token is **scoped to a single Resource** (`@namespace/name`, independent of version). It never authorizes another Resource and never crosses namespaces.
+- The lifetime is **bounded by namespace policy**, which sets the maximum — seconds up to a few hours — exactly as a namespace MAY shorten any token's effective lifetime (§7.2). The Authenticator service MUST NOT grant longer, nothing outside the namespace policy MAY lengthen it, and the caller MAY always re-authorize sooner.
+- The token is **scoped to a single Resource** (`@namespace/name`, independent of version). It never authorizes another Resource and never crosses namespaces; the Authenticator service refuses it for any other.
 - **Tier 2 only.** Tier 1 never issues an authorization token; it is interactive at every invocation (§7.3), and no lifetime, flag, or configuration changes that.
 - A namespace policy MAY set the maximum lifetime to zero to forbid authorization tokens, in which case every Tier 2 invocation is re-confirmed — the strict behavior is the default.
 - An authorization token proves only that the authorization was given and has not expired. Identity is still proven by a valid long-lived Registry token (§7.2) on every call; the authorization token never substitutes for identity and never admits a credential weaker than the Tier requires, so it does **not** weaken the Resource's Tier (§9.2).
-- For a `caller-device` Resource the token is held by the caller on the caller's own device (§6.5). For a `server` Resource the Provider's approval (§6.4) governs and is single-use; a Tier 2 authorization token never stands in for it.
+- For a `caller-device` Resource the Authenticator service grants and verifies the token; the caller's device only holds it (§6.5). For a gated Action (§6.4) the single-use confirmation governs; a Tier 2 authorization token never stands in for it.
 
 ### 7.5 Namespace access confirmation
 
@@ -557,6 +569,23 @@ After a successful sign-in the page delivers the token by a **top-level form POS
 
 **Why this is safe.** The token goes from the browser to a listener bound to the loopback interface only, and the Registry refuses any callback that would send it elsewhere, so a crafted link cannot exfiltrate it. `state` binds the response to this CLI run, so another local page or process cannot inject its own token. A form POST keeps the token out of the address bar, history, and referrers. Nothing here changes the token (§7.2) or who may sign in: the page is the Auth Server's own login, and the CLI only saves the copying.
 
+### 7.8 Pending interactions and asynchronous completion
+
+A step that needs the person — signing in to the target, confirming one invocation, or both at once — can outlast one request. The Executor therefore never waits on the Authenticator service as a condition of correctness: every such step is a **pending exchange** that the Executor MAY complete within the same call (holding the connection, as `browser-login` does) or across calls (returning to its own caller and re-invoking later, as `poll-login` does). Both are the same exchange; only how long the Executor stays is different.
+
+The exchange runs between the Executor and the Authenticator service alone. No step requires a Registry token or a call to a Registry, so it works the same for a Resource reached without a Registry — an Application invoking a Provider directly — and the identity it establishes is the Authenticator service's own subject, not a Registry Principal.
+
+1. **Start.** The Executor calls `confirm` (or `authenticate` in mode `initial` or `step-up`, for authentication alone) with the effective Tier and a **challenge**: the `sha256` of a random verifier of at least 128 bits that the Executor keeps. `confirm` also carries the **invocation descriptor** `{resource, operation, requestHash}`, where `requestHash` is computed as in §6.4; for a gated Action the executing party starts it with its own summary (§6.4). The descriptor lets the Authenticator service show the person exactly what they are asked to allow and bind the confirmation to that invocation.
+2. **Pending.** The Authenticator service answers `pending` with an entry point for the person, an opaque **handle**, a poll interval, and an expiry. The handle is unguessable and grants nothing by itself.
+3. **Relay.** The Executor brings the entry point to the person: a terminal prints or opens it; a surface serving an agent returns it as the result of the call, and the agent re-invokes the same operation later. An Executor that keeps no state between calls (a gateway) hands the handle and verifier to its own caller to carry back, and is no more trusted for it (§7.3).
+4. **Decision.** The person completes the step at the entry point, which is the Authenticator service's own page. It identifies the person by its own means (a sign-in the target trusts) and, for `confirm`, takes their decision on the described invocation — signing them in first within the same interaction when they are not authenticated or the Tier demands it afresh (§4.7).
+5. **Collection.** The Executor calls the same operation again with the handle and the verifier. The Authenticator service returns the result only when the verifier matches the challenge, so a party that saw the entry point or the handle cannot collect it. Until the decision it answers `pending`; after the expiry or a refusal it fails, and it MUST NOT answer `pending` indefinitely. A handle is collected **once**.
+6. **Use.** The verifier the Authenticator declares (§4.7.1, *authorization enforcement*) accepts a confirmation once, for the invocation it describes, recomputing the request hash from the request in hand wherever it sees the request. At Tier 1 the Executor discards any credential material that came with it after that one use; at Tier 2 the confirmation MAY carry an authorization token (§7.4a).
+
+**Intermediate state.** The pending state belongs to the Authenticator service, which keeps it in its own store. It MAY instead keep it in a Registry's pending-state store (§10), when it has one: an entry keyed by the Authenticator and the handle, bounded in size and lifetime, written and read only under the identity registered for that Authenticator's service in its namespace (§8.2a). The store is storage only. The Registry interprets nothing in an entry and takes no identity or authorization decision from it, and an entry MUST NOT contain credential material (§7.6). Identifying the person precisely and deciding what they may do belong to the Authenticator (§4.7.1, *authorization enforcement*), never to the Registry.
+
+The audit event (§8.3) — `auth` for `authenticate`, `approve` or `reject` for `confirm` — is produced by the Authenticator service on the terminal outcome of the exchange (issued, refused, or expired), not on each poll.
+
 ---
 
 ## 8. Audit
@@ -573,7 +602,7 @@ After a successful sign-in the page delivers the token by a **top-level form POS
 - When a destination is declared, every server-side writer (§8.2a) acting within that namespace MUST deliver its events there. A writer that cannot deliver MUST buffer in a durable local log, MUST refuse to discard buffered events, and MUST redeliver them; redelivery is idempotent by event id.
 - An Auth Server MUST NOT be an audit destination for Resource invocations.
 - The central audit store is written by whoever ran the work server-side, each recording what it observed, so each carries that party's level of trust:
-  - **Registry record.** The Registry writes what it observes itself: sign-in, token issue and revocation, resolve, search, publish, yank, approvals, and audit query.
+  - **Registry record.** The Registry writes what it observes itself: sign-in, token issue and revocation, resolve, search, publish, yank, and audit query.
   - **Server-side Resource record.** A Resource that runs server-side — an Executor Resource (`trusted-executor`, §6A) or a self-hosted `server` Resource (§6.5) — writes the work it answered on behalf of a caller: which operation, for which caller, with what result (§8.2a). An Executor Resource additionally writes a `dispatch` record of who used it to run which Resource (§6A.3).
   - **Provider record.** A registered Provider (§10) writes the server-side Resource record of every `server` Resource of its namespace under its own service identity, in place of per-Resource tokens (§8.2a). It is the same record with a different credential behind it.
 - Work that runs on the caller's device is **not** written to the central store. The Executor CLI records it as the caller's own report and keeps it locally (`~/.doax/audit.jsonl`, §8.3); it is never delivered.
@@ -594,6 +623,7 @@ The Registry MUST refuse an event that comes with neither a live resource token 
 |---|---|
 | all | *caller*: the device identifier, the Executor Resource, or the Application (§2) that the Resource answered, as passed in the operation's context (§4.6), or `unknown`; *outcome* with a reason code drawn from the declared fault classes (§13.2) |
 | `authenticate` | *authenticator* (the Resource's own identity) and mode. Credential material MUST NOT be recorded. |
+| `confirm` | *authenticator*; the subject who decided; the invocation descriptor (§7.8); the confirmation id. The confirmation itself MUST NOT be recorded. |
 | `metadata` | *source freshness*: the `lastRefreshed` value reported |
 | `read` | *source freshness*: the `freshness` value of the response (§5.7); *record count*: the number of records returned; *time range*: the time range the returned records cover; *continued*: whether `continuation` was returned, i.e. the result was partial |
 | `dry-run` | *target*; *dry-run flag*: mode, and `estimated` when predictive; for a gated Action (§6.4), the *approval* id requested |
@@ -618,7 +648,7 @@ The following MUST produce an audit event:
 | `execute` | An Action is executed |
 | `dispatch` | Work is handed to an Executor Resource (§6A.3), including scheduling of a deferred run |
 | `recover` | A recovery action is executed |
-| `approve` / `reject` | A human-in-the-loop gate is decided by the person asked (§6.4) |
+| `approve` / `reject` | A `confirm` (§4.7) reaches its terminal outcome: the person confirms or refuses an invocation, including a gated Action (§6.4). Recorded by the Authenticator service. |
 | `step-up` | A Resource demands a stronger Tier at runtime (§7.4) |
 | `auth` | A Principal signs in to the Registry, a token is issued, refreshed, or revoked; or an Authenticator's `authenticate` operation is invoked (§4.7), recording the Authenticator, mode, and outcome only |
 | `publish` / `deprecate` / `yank` | A Resource version's lifecycle changes |
@@ -648,9 +678,9 @@ Every event MUST record:
 | external reference | For `execute` and `recover`: the identifier the target system assigned to the effect, or `unknown` |
 | caller / reporter | For Resource records (§8.2a): the caller the Resource answered, and the credential that delivered the event, a resource token by id or a Provider by identity (the Registry sets the reporter and its *source*) |
 | token audience / channel / method | For Resource records written by a Provider: the audience, channel, and method of the token it accepted (§7.2), so that portal use and executor use of the same Resource are told apart |
-| approval | For `dry-run` and `execute` of a gated Action (§6.4): the approval id requested or consumed |
+| approval | For `dry-run` and `execute` of a gated Action (§6.4): the id of the confirmation requested or consumed |
 | payload | For `execute` with an out-of-band payload (§6.6): its size and digest as observed |
-| linked event | For `recover`: the id of the `execute` event being compensated. For `approve`/`reject`: the approval id, which identifies the request hash (§6.4); the `execute` that consumes it carries the same id in *approval*. For `data-read`, `dry-run`, or `execute` run on an Executor Resource: the `dispatch` event. |
+| linked event | For `recover`: the id of the `execute` event being compensated. For `approve`/`reject`: the confirmation id, which identifies the request hash (§6.4); the `execute` that consumes it carries the same id in *approval*. For `data-read`, `dry-run`, or `execute` run on an Executor Resource: the `dispatch` event. |
 | upstream origin | For `resolve` and `fetch` from an Upstream: the Upstream's identity |
 
 ### 8.5 Audit query
@@ -669,12 +699,12 @@ The Executor MUST:
 1. Obtain a Registry token (§7.2) from the Auth Server the configured Registry trusts, through whatever login that Auth Server uses (§7.7 when it is a web page), and hold it.
 2. Resolve a Resource against the Registry that owns its namespace (§12.1; Private first, Upstream if permitted). If the Resource is declared `trusted-executor`, resolve a matching Executor Resource (§6A.5) and route the operation through its `dispatch` instead of running it locally. If it is declared `server`, invoke it over its binding with a token issued for its Provider (§7.2).
 3. Fetch the Package and verify its integrity digest against the Manifest before running anything.
-4. Compute the effective Tier (§7.4) and run the matching authorization flow:
-   - Tier 1: open an interactive authentication surface (browser-based login or consent) and wait for completion.
-   - Tier 2: present the token, request per-call authorization confirmation from the caller, and proceed only on confirmation — or, when a Tier 2 authorization token for the same Resource is still within its lifetime (§7.4a), proceed on that token. For a `server` Resource this confirmation does not stand in for the Provider's approval (§6.4, §6.5).
+4. Compute the effective Tier (§7.4) and run the matching flow. Each flow is the interaction surface for a party that enforces it (§7.3), not a check the Executor makes:
+   - Tier 1: call the Authenticator's `confirm` with the invocation descriptor (§7.8), provide the interaction it requests, and proceed with the confirmation it issues for this invocation.
+   - Tier 2: present the token; unless it holds an authorization token for the Resource still within its lifetime (§7.4a), call `confirm` likewise. For a gated Action the executing party starts `confirm` itself (§6.4).
    - Tier 3: present the token, proceed.
    - Tier 4: proceed, mark actor as anonymous.
-5. Resolve the Resource's referenced Authenticator; if no cached credential exists for this caller and Authenticator (or the Tier requires it), call its `authenticate` in the appropriate mode, provide the interaction surface it requests, and cache the resulting material. Hand the material to the Resource's operations.
+5. Resolve the Resource's referenced Authenticator; if no cached credential exists for this caller and Authenticator (or the Tier requires it), call its `authenticate` in the appropriate mode, provide the interaction surface it requests, and cache the resulting material. When it answers `pending`, relay the entry point and complete the exchange as §7.8 describes, in this call or a later one. Hand the material to the Resource's operations.
 6. Honor any runtime step-up by re-entering steps 4 and 5 at the stronger Tier.
 7. Offer dry-run when the Action declares a mode other than `none`; warn when it declares `none`.
 8. Generate the idempotency key for `execute`/`recover`.
@@ -685,6 +715,7 @@ The Executor MUST:
 
 - The Executor MUST refuse to run a Package whose integrity digest does not match.
 - The Executor MUST refuse to weaken a Tier under any flag or configuration.
+- The Executor MUST NOT present its own prompt, flag, or confirmation as an authentication or authorization: a Tier 1 or 2 invocation proceeds only on material the Authenticator service or Provider issued for it (§7.3).
 - The Executor MUST refuse to retry a `non-idempotent` Action without explicit confirmation.
 - The Executor MUST make the verification status (§4.5) of a Resource visible before execution.
 - The Executor CLI MUST NOT run a `trusted-executor` Resource locally, and MUST NOT ask an Executor Resource to run a `caller-device` Resource (§6.5).
@@ -710,7 +741,7 @@ The Registry Server MUST provide the following capabilities over HTTPS with JSON
 | Login discovery | Declare, without a token, the login methods the Auth Server offers and where its web login page is (§7.7). |
 | Verification material | Publish, without a token, the public material needed to verify its tokens offline (§7.2). |
 | Token exchange | Issue a Provider-audience token in exchange for a Registry token (§7.2). |
-| Approvals | Accept an approval request from a registered Provider, present it to the person named, record their decision as `approve` or `reject` under a fresh interactive sign-in, and hand the signed approval to the Provider (§6.4). |
+| Pending-state store | Hold the intermediate state of an Authenticator service's pending exchanges (§7.8): entries keyed by Authenticator and handle, bounded in size and lifetime, written and read only under the identity registered for that Authenticator's service in its namespace. Storage only: the Registry interprets no entry, takes no identity or authorization decision from one, and refuses an entry past its maximum lifetime or carrying credential material. |
 | Audit ingest | Accept Resource records (§8.2a) under a resource token or a registered Provider's identity, refusing events for other Resources or namespaces, events whose execution location is not server-side, and events with mandatory fields missing. Append-only. |
 | Resource tokens | Issue, list, and revoke a Resource's audit tokens, for its managers (§8.2a). |
 | Audit query | Per §8.5. |
