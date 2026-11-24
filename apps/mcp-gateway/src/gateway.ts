@@ -36,6 +36,7 @@ mkdirSync(CACHE, { recursive: true });
 export interface SetCookie {
     name: string;
     value: string;
+    expire?: boolean;
 }
 
 /** A per-request home: this caller's credentials.json (from their cookie) plus the shared package cache. */
@@ -115,7 +116,11 @@ function filesToCookies(home: string): SetCookie[] {
         } catch {
             return;
         }
-        for (const [key, entry] of Object.entries(obj)) out.push({ name: prefix + key.replace(/[^a-zA-Z0-9]/g, "_"), value: Buffer.from(JSON.stringify(entry)).toString("base64url") });
+        for (const [key, entry] of Object.entries(obj)) {
+            const name = prefix + key.replace(/[^a-zA-Z0-9]/g, "_");
+            if ((entry as { expired?: boolean })?.expired) out.push({ name, value: "", expire: true });
+            else out.push({ name, value: Buffer.from(JSON.stringify(entry)).toString("base64url") });
+        }
     };
     add(COOKIE_CRED, "credentials.json");
     add(COOKIE_AUTH, "auth-tokens.json");
@@ -216,7 +221,7 @@ async function maybePoll(deps: CliDeps, stderr: string | undefined): Promise<Pol
         return { signIn: asText(JSON.stringify({ status: "sign_in", verificationUrl: pr.verificationUrl, howto: "open the URL and sign in, then call this tool again" }, null, 2)) };
     }
     if (pr.authenticated) {
-        savePollHandle(home, key, null);
+        savePollHandle(home, key, { expired: true });
         return { retry: true };
     }
     return null;
@@ -229,7 +234,8 @@ async function readTool(deps: CliDeps, args: Record<string, unknown>) {
     if (r.exitCode !== 0) {
         const step = await maybePoll(deps, r.stderr);
         if (step && "signIn" in step) return step.signIn;
-        if (step && "retry" in step) r = await run(cmd, deps);
+        // The completed sign-in is this call's authorization for a read (§7.4), so --yes alongside --authed.
+        if (step && "retry" in step) r = await run([...cmd, "--authed", "--yes"], deps);
     }
     return r.exitCode === 0 ? asText(r.stdout ?? "") : handbackOrError(r.stderr);
 }
@@ -241,7 +247,7 @@ async function executeTool(deps: CliDeps, args: Record<string, unknown>, dryRun:
     if (r.exitCode !== 0) {
         const step = await maybePoll(deps, r.stderr);
         if (step && "signIn" in step) return step.signIn;
-        if (step && "retry" in step) r = await run(cmd, deps);
+        if (step && "retry" in step) r = await run([...cmd, "--authed"], deps);
     }
     return r.exitCode === 0 ? asText(r.stdout ?? "") : handbackOrError(r.stderr);
 }
@@ -289,7 +295,8 @@ export function parseCookies(header: string | undefined): Record<string, string>
     return out;
 }
 
-export const setCookieHeader = ({ name, value }: SetCookie): string => `${name}=${value}; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=86400`;
+export const setCookieHeader = ({ name, value, expire }: SetCookie): string =>
+    `${name}=${expire ? "" : value}; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=${expire ? 0 : 86400}`;
 
 export const rpcError = (id: JsonRpcMessage["id"], code: number, message: string) => ({ jsonrpc: "2.0", id: id ?? null, error: { code, message } });
 

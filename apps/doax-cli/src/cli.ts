@@ -176,6 +176,7 @@ export async function run(argv: string[], deps: CliDeps = defaultDeps()): Promis
             "no-browser": { type: "boolean" },
             timeout: { type: "string" },
             handle: { type: "string" },
+            authed: { type: "boolean" },
         },
         allowPositionals: true,
         strict: false,
@@ -873,13 +874,15 @@ async function browserLoginSecret(deps: ExecutorDeps, authResolved: ResolvedReso
   * (§9.1 steps 4-5). No pre-auth is required: when nothing is cached and the session is
   * interactive, the auth flow runs inline, in context, and the operation continues.
   */
-async function credentialFor(deps: ExecutorDeps, resolved: ResolvedResource, inlineSecret?: string) {
+async function credentialFor(deps: ExecutorDeps, resolved: ResolvedResource, inlineSecret?: string, useFresh = false) {
     const authRef = resolved.manifest.authenticator;
     if (!authRef || authRef === "none") return { credential: null, authenticator: "none" as const, effective: effectiveTierFor(resolved, null) };
     const authResolved = await resolveResource(deps, String(authRef));
     const authTier = (authResolved.manifest.requiredTier as Tier | undefined) ?? null;
     const effective = effectiveTierFor(resolved, authTier);
-    let entry = effective.tier === 1 || inlineSecret ? undefined : readCredentials(deps)[credentialKey(String(authRef))];
+    // Tier 1 re-authenticates every call (§4.7) — unless the auth for this call just completed (useFresh), as
+    // when a poll-login gateway minted the credential this invocation and re-runs to use it.
+    let entry = (effective.tier === 1 && !useFresh) || inlineSecret ? undefined : readCredentials(deps)[credentialKey(String(authRef))];
     if (!entry && inlineSecret) {
         entry = await acquireCredential(deps, authResolved, inlineSecret);
     }
@@ -997,7 +1000,7 @@ async function readCmd(deps: CliDeps, refInput: string | undefined, values: Reco
     const resolved = await resolveResource(xdeps, refInput);
     if (resolved.kind !== "data-source") return { exitCode: 1, stderr: `doax read: ${resolved.identity} is a ${resolved.kind}, not a data-source` };
 
-    const { credential, authenticator, effective } = await credentialFor(xdeps, resolved, values.secret as string | undefined);
+    const { credential, authenticator, effective } = await credentialFor(xdeps, resolved, values.secret as string | undefined, Boolean(values.authed));
     await confirmTier(xdeps, resolved, effective, Boolean(values.yes), `read ${resolved.identity}`);
     const module = await loadPackage(xdeps, resolved);
     const operation = values.metadata ? "metadata" : "read";
@@ -1023,7 +1026,7 @@ async function executeCmd(deps: CliDeps, refInput: string | undefined, values: R
     const resolved = await resolveResource(xdeps, refInput);
     if (resolved.kind !== "action") return { exitCode: 1, stderr: `doax execute: ${resolved.identity} is a ${resolved.kind}, not an action` };
 
-    const { credential, authenticator, effective } = await credentialFor(xdeps, resolved, values.secret as string | undefined);
+    const { credential, authenticator, effective } = await credentialFor(xdeps, resolved, values.secret as string | undefined, Boolean(values.authed));
     const module = await loadPackage(xdeps, resolved);
     const input = paramsToInput(values.param);
     const dryRunMode = resolved.manifest.dryRunMode ?? "none";
